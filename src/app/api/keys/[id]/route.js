@@ -1,11 +1,21 @@
 import { NextResponse } from "next/server";
 import { deleteApiKey, getApiKeyById, updateApiKey } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
+
+async function ownedOrNull(id, user) {
+  const key = await getApiKeyById(id);
+  if (!key) return null;
+  if (user?.id && key.userId && key.userId !== user.id) return null;
+  if (user?.id && !key.userId) return null;
+  return key;
+}
 
 // GET /api/keys/[id] - Get single key
 export async function GET(request, { params }) {
   try {
     const { id } = await params;
-    const key = await getApiKeyById(id);
+    const user = await getRequestUser();
+    const key = await ownedOrNull(id, user);
     if (!key) {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });
     }
@@ -23,7 +33,8 @@ export async function PUT(request, { params }) {
     const body = await request.json();
     const { isActive } = body;
 
-    const existing = await getApiKeyById(id);
+    const user = await getRequestUser();
+    const existing = await ownedOrNull(id, user);
     if (!existing) {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });
     }
@@ -45,6 +56,11 @@ export async function DELETE(request, { params }) {
   try {
     const { id } = await params;
 
+    const user = await getRequestUser();
+    const existing = await ownedOrNull(id, user);
+    if (!existing) {
+      return NextResponse.json({ error: "Key not found" }, { status: 404 });
+    }
     const deleted = await deleteApiKey(id);
     if (!deleted) {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });

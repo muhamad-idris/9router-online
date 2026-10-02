@@ -2,6 +2,8 @@
 import "open-sse/index.js";
 
 import { getProviderConnectionById } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
 import { consumeCodexRateLimitResetCredit, getCodexRateLimitResetCredits } from "open-sse/services/usage.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "../route.js";
@@ -52,6 +54,13 @@ async function getCodexConnection(connectionId) {
   if (!connection) {
     return { response: Response.json({ error: "Connection not found" }, { status: 404 }) };
   }
+
+  // Ownership check: quota reads may refresh the owner's live tokens.
+  try {
+    if (isForeignRow(connection, await getRequestUser())) {
+      return { response: Response.json({ error: "Connection not found" }, { status: 404 }) };
+    }
+  } catch {}
 
   if (connection.provider !== "codex") {
     return { response: Response.json({ error: "Codex reset credits are only available for Codex connections." }, { status: 400 }) };

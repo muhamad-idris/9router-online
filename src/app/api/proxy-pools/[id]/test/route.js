@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getProxyPoolById, updateProxyPool } from "@/models";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
 import { testProxyUrl } from "@/lib/network/proxyTest";
 import { fetch as undiciFetch } from "undici";
 
@@ -42,6 +44,13 @@ export async function POST(request, { params }) {
     if (!proxyPool) {
       return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
     }
+
+    // Ownership check: testing egresses through the owner's proxy credentials.
+    try {
+      if (isForeignRow(proxyPool, await getRequestUser())) {
+        return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
+      }
+    } catch {}
 
     const result = proxyPool.type === "vercel" || proxyPool.type === "cloudflare" || proxyPool.type === "deno"
       ? await testVercelRelay(proxyPool.proxyUrl)

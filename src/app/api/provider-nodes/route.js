@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderNode, getProviderNodes } from "@/models";
+import { getRequestUser } from "@/lib/auth/requestUser";
 import { OPENAI_COMPATIBLE_PREFIX, ANTHROPIC_COMPATIBLE_PREFIX, CUSTOM_EMBEDDING_PREFIX } from "@/shared/constants/providers";
 import { generateId } from "@/shared/utils";
 
@@ -17,10 +18,14 @@ const CUSTOM_EMBEDDING_DEFAULTS = {
   baseUrl: "https://api.openai.com/v1",
 };
 
-// GET /api/provider-nodes - List all provider nodes
+// GET /api/provider-nodes - List all provider nodes (scoped per user in online mode)
 export async function GET() {
   try {
-    const nodes = await getProviderNodes();
+    let viewerId = null;
+    try {
+      viewerId = (await getRequestUser())?.id || null;
+    } catch {}
+    const nodes = await getProviderNodes(viewerId ? { userId: viewerId } : {});
     return NextResponse.json({ nodes });
   } catch (error) {
     console.log("Error fetching provider nodes:", error);
@@ -33,6 +38,12 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const { name, prefix, apiType, baseUrl, type } = body;
+
+    // Attribute the node to the logged-in user in online mode.
+    let ownerId = null;
+    try {
+      ownerId = (await getRequestUser())?.id || null;
+    } catch {}
 
     if (!name?.trim()) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
@@ -53,6 +64,7 @@ export async function POST(request) {
       const node = await createProviderNode({
         id: `${OPENAI_COMPATIBLE_PREFIX}${apiType}-${generateId()}`,
         type: "openai-compatible",
+        userId: ownerId,
         prefix: prefix.trim(),
         apiType,
         baseUrl: (baseUrl || OPENAI_COMPATIBLE_DEFAULTS.baseUrl).trim(),
@@ -71,6 +83,7 @@ export async function POST(request) {
       const node = await createProviderNode({
         id: `${CUSTOM_EMBEDDING_PREFIX}${generateId()}`,
         type: "custom-embedding",
+        userId: ownerId,
         prefix: prefix.trim(),
         baseUrl: sanitizedBaseUrl,
         name: name.trim(),
@@ -89,6 +102,7 @@ export async function POST(request) {
       const node = await createProviderNode({
         id: `${ANTHROPIC_COMPATIBLE_PREFIX}${generateId()}`,
         type: "anthropic-compatible",
+        userId: ownerId,
         prefix: prefix.trim(),
         baseUrl: sanitizedBaseUrl,
         name: name.trim(),

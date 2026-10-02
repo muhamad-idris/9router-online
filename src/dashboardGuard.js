@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings, validateApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
+import { verifyDashboardAuthToken, getDashboardAuthSession, isSessionAllowed, getSessionUser } from "@/lib/auth/dashboardSession";
 import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
@@ -25,6 +25,7 @@ const PUBLIC_API_PATHS = [
   "/api/init",
   "/api/locale",
   "/api/auth/login",
+  "/api/auth/register",
   "/api/auth/logout",
   "/api/auth/status",
   "/api/auth/oidc",
@@ -68,6 +69,43 @@ const PROTECTED_API_PATHS = [
   "/api/translator",
   "/api/tunnel",
 ];
+
+// Host-level families: read/write host files, spawn processes, kill/update
+// the server, manage tunnels. Instance-admin only in bridge mode.
+// (/api/mcp/*, headroom start/stop/proxy, tunnel enable/disable, tailscale-*
+// and cli-tools cowork/mitm are LOCAL_ONLY on top of this — stricter, unchanged.)
+const ADMIN_ONLY_PREFIXES = [
+  "/api/cli-tools",
+  "/api/headroom",
+  "/api/pxpipe",
+  "/api/proxy-pools",
+  "/api/translator/console-logs",
+  "/api/tunnel",
+  "/api/version/update",
+  "/api/version/shutdown",
+];
+
+// Pure-SSRF primitive with no per-user need (user node probing stays in
+// providers/validate, scoped to owned nodes).
+const ADMIN_ONLY_EXACT = [
+  "/api/providers/suggested-models",
+];
+
+// Instance admin = local CLI token, or a valid JWT from the instance-password
+// session (no users-table row, no SSO claims). Registered users never pass.
+async function isAdminRequest(request) {
+  if (await hasValidCliToken(request)) return true;
+  try {
+    const token = request.cookies.get("auth_token")?.value;
+    if (!token) return false;
+    const session = await getDashboardAuthSession(token);
+    if (!session || !isSessionAllowed(session)) return false;
+    const user = getSessionUser(session);
+    return !!user && !user.id;
+  } catch {
+    return false;
+  }
+}
 
 // Routes that spawn child processes or read host secrets — restrict to localhost.
 const LOCAL_ONLY_PATHS = [
@@ -169,6 +207,14 @@ async function canAccessLocalOnlyRoute(request) {
 
 async function hasValidToken(request) {
   const token = request.cookies.get("auth_token")?.value;
+  if (!token) return false;
+  try {
+    // Reject SSO-claim tokens even if cryptographically valid (SSO disabled).
+    const session = await getDashboardAuthSession(token);
+    if (!isSessionAllowed(session)) return false;
+  } catch {
+    return false;
+  }
   return await verifyDashboardAuthToken(token);
 }
 
@@ -211,6 +257,23 @@ export async function proxy(request) {
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {
     if (!(await canAccessLocalOnlyRoute(request))) {
       return NextResponse.json({ error: "Local only: CLI token required" }, { status: 403 });
+    }
+  }
+
+  // Bridge mode (requireLogin=true) only: host-level families are instance-admin
+  // only — a valid registered-user JWT gets 403 here. Local mode (requireLogin
+  // false) has no remote users, so the local operator keeps full access.
+  // Unauthenticated requests fall through so the standard gates below answer 401.
+  if (
+    ADMIN_ONLY_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`)) ||
+    ADMIN_ONLY_EXACT.includes(pathname)
+  ) {
+    const settings = await loadSettings();
+    if (settings?.requireLogin !== false) {
+      if (await isAdminRequest(request)) return NextResponse.next();
+      if (await hasValidToken(request)) {
+        return NextResponse.json({ error: "Admin only" }, { status: 403 });
+      }
     }
   }
 
@@ -262,10 +325,17 @@ export async function proxy(request) {
     // If login not required, allow through
     if (!requireLogin) return NextResponse.next();
 
-    // Verify JWT token
+    // Verify JWT token (SSO-claim tokens rejected — SSO disabled).
     const token = request.cookies.get("auth_token")?.value;
     if (token) {
-      if (await verifyDashboardAuthToken(token)) {
+      let allowed = false;
+      try {
+        const session = await getDashboardAuthSession(token);
+        allowed = isSessionAllowed(session) && await verifyDashboardAuthToken(token);
+      } catch {
+        allowed = false;
+      }
+      if (allowed) {
         return NextResponse.next();
       } else {
         return NextResponse.redirect(new URL("/login", request.url));

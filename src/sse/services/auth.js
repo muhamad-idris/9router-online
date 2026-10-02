@@ -1,4 +1,4 @@
-import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
+import { getProviderConnections, validateApiKey, resolveGatewayIdentity, updateProviderConnection, getSettings, getEffectiveSettings, getProxyPools } from "@/lib/localDb";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
@@ -42,17 +42,32 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
 
     // Resolve alias to provider ID (e.g., "kc" -> "kilocode")
     const providerId = resolveProviderId(provider);
+    // Per-user scoping for online mode: only this user's connections are visible.
+    // Legacy local mode (no userId) keeps the old shared-pool behavior.
+    const ownerId = options?.userId || null;
 
     // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings)
     if (FREE_PROVIDERS[providerId]?.noAuth) {
-      const settings = await getSettings();
+      const settings = await getEffectiveSettings(ownerId);
       const override = (settings.providerStrategies || {})[providerId] || {};
       const strategy = override.rotateStrategy || "none";
       let pickedId = override.proxyPoolId || null;
+      // Owner check: a settings-level pool id must belong to the caller.
+      // (providerStrategies is still global — see settings-per-user backlog.)
+      if (pickedId && ownerId) {
+        try {
+          const { getProxyPoolById } = await import("@/lib/localDb");
+          const pool = await getProxyPoolById(pickedId);
+          if (!pool || (pool.userId && pool.userId !== ownerId)) pickedId = null;
+        } catch {
+          pickedId = null;
+        }
+      }
       if (strategy !== "none") {
-        const allPools = await getProxyPools({ isActive: true });
+        // Rotation only across the caller's own pools (legacy: all pools).
+        const allPools = await getProxyPools(ownerId ? { isActive: true, userId: ownerId } : { isActive: true });
         const poolIds = allPools.filter(p => p.proxyUrl).map(p => p.id);
-        pickedId = pickProxyPoolId(poolIds, strategy, providerId);
+        pickedId = pickProxyPoolId(poolIds, strategy, providerId, ownerId || "shared");
       }
       const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
       return {
@@ -70,7 +85,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       };
     }
 
-    const connections = await getProviderConnections({ provider: providerId, isActive: true });
+    const connections = await getProviderConnections(ownerId ? { provider: providerId, isActive: true, userId: ownerId } : { provider: providerId, isActive: true });
     log.debug("AUTH", `${provider} | total connections: ${connections.length}, excludeIds: ${excludeSet.size > 0 ? [...excludeSet].join(",") : "none"}, model: ${model || "any"}`);
 
     if (connections.length === 0) {
@@ -136,7 +151,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       return null;
     }
 
-    const settings = await getSettings();
+    const settings = await getEffectiveSettings(ownerId);
     // Per-provider strategy overrides global setting
     const providerOverride = (settings.providerStrategies || {})[providerId] || {};
     const strategy = providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
@@ -364,4 +379,20 @@ export function extractApiKey(request) {
 export async function isValidApiKey(apiKey) {
   if (!apiKey) return false;
   return await validateApiKey(apiKey);
+}
+
+/**
+ * Resolve the caller's identity from a gateway key for per-user routing.
+ * Returns { userId, keyId, apiKey } — userId null means legacy shared mode.
+ */
+export async function resolveRequestIdentity(request) {
+  const apiKey = extractApiKey(request);
+  if (!apiKey) return { userId: null, keyId: null, apiKey: null };
+  try {
+    const identity = await resolveGatewayIdentity(apiKey);
+    if (!identity) return { userId: null, keyId: null, apiKey };
+    return { userId: identity.userId, keyId: identity.keyId, apiKey };
+  } catch {
+    return { userId: null, keyId: null, apiKey };
+  }
 }

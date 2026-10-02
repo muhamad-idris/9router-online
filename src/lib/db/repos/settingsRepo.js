@@ -140,3 +140,98 @@ export async function getCloudUrl() {
 export async function exportSettings() {
   return await readRaw();
 }
+
+// ─── Per-user settings (bridge mode) ─────────────────────────────────────
+// Keys a registered user may keep for themselves. Everything else stays
+// global + admin-only (password, requireLogin/ApiKey, SSO, tunnel/tailscale,
+// outbound proxy, mitm, cloud, observability limits).
+export const USER_SETTINGS_ALLOWLIST = new Set([
+  "fallbackStrategy",
+  "stickyRoundRobinLimit",
+  "providerStrategies",
+  "comboStrategy",
+  "comboStickyRoundRobinLimit",
+  "comboStrategies",
+  "capacityAdapter",
+  "providerThinking",
+  "providerOverrides",
+  "quotaVisibility",
+  "rtkEnabled",
+  "ccFilterNaming",
+  "claudeAutoPing",
+  "codexAutoPing",
+  "enableObservability",
+  "headroomEnabled",
+  "headroomUrl",
+  "headroomCompressUserMessages",
+  "headroomTimeoutMs",
+  "cavemanEnabled",
+  "cavemanLevel",
+  "ponytailEnabled",
+  "ponytailLevel",
+  "pxpipeEnabled",
+  "pxpipeAutoInstall",
+  "pxpipeMinChars",
+  "pxpipeTimeoutMs",
+]);
+
+// Daemon-backed savers: a user may only opt OUT. If the instance disabled it,
+// per-user opt-in must not re-enable it.
+const GATED_BY_GLOBAL = new Set(["headroomEnabled", "pxpipeEnabled"]);
+
+export function pickUserSettings(patch = {}) {
+  const out = {};
+  for (const key of USER_SETTINGS_ALLOWLIST) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) out[key] = patch[key];
+  }
+  return out;
+}
+
+async function readUserRaw(userId) {
+  if (!userId) return {};
+  const db = await getAdapter();
+  try {
+    const row = db.get(`SELECT data FROM user_settings WHERE userId = ?`, [userId]);
+    return row ? parseJson(row.data, {}) : {};
+  } catch {
+    return {};
+  }
+}
+
+// Effective settings for a caller: DEFAULTS ← global row ← user's allowlisted
+// keys. Null/legacy callers get the plain global settings (unchanged).
+export async function getEffectiveSettings(userId = null) {
+  const global = await getSettings();
+  if (!userId) return global;
+  const userRaw = await readUserRaw(userId);
+  const eff = { ...global, ...pickUserSettings(userRaw) };
+  for (const key of GATED_BY_GLOBAL) {
+    if (!global[key]) eff[key] = false;
+  }
+  return eff;
+}
+
+export async function getUserSettings(userId) {
+  if (!userId) return {};
+  return pickUserSettings(await readUserRaw(userId));
+}
+
+export async function updateUserSettings(userId, patch) {
+  if (!userId) throw new Error("userId is required");
+  const clean = pickUserSettings(patch || {});
+  const db = await getAdapter();
+  let next;
+  db.transaction(function () {
+    let current = {};
+    try {
+      const row = db.get(`SELECT data FROM user_settings WHERE userId = ?`, [userId]);
+      current = row ? parseJson(row.data, {}) : {};
+    } catch {}
+    next = { ...pickUserSettings(current), ...clean };
+    db.run(
+      `INSERT INTO user_settings(userId, data, updatedAt) VALUES(?, ?, ?) ON CONFLICT(userId) DO UPDATE SET data = excluded.data, updatedAt = excluded.updatedAt`,
+      [userId, stringifyJson(next), new Date().toISOString()]
+    );
+  });
+  return next;
+}

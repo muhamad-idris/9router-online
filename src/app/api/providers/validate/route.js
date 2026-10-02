@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getProviderNodeById } from "@/models";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
@@ -88,6 +90,12 @@ export async function POST(request) {
     const provider = normalizeProviderId(body.provider);
     const { apiKey, providerSpecificData } = body;
 
+    // Node ownership in online mode (nodes carry baseUrls; legacy: open).
+    let viewer = null;
+    try {
+      viewer = await getRequestUser();
+    } catch {}
+
     const isNoAuth = AI_PROVIDERS[provider]?.noAuth === true;
     if (!provider || (!apiKey && provider !== "ollama-local" && !isNoAuth)) {
       return NextResponse.json({ error: "Provider and API key required" }, { status: 400 });
@@ -100,7 +108,7 @@ export async function POST(request) {
     try {
       if (isOpenAICompatibleProvider(provider)) {
         const node = await getProviderNodeById(provider);
-        if (!node) {
+        if (!node || isForeignRow(node, viewer)) {
           return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
         }
         const modelsUrl = `${node.baseUrl?.replace(/\/$/, "")}/models`;
@@ -117,7 +125,7 @@ export async function POST(request) {
       // Custom Embedding nodes: probe /models (most embedding APIs are OpenAI-compatible)
       if (isCustomEmbeddingProvider(provider)) {
         const node = await getProviderNodeById(provider);
-        if (!node) {
+        if (!node || isForeignRow(node, viewer)) {
           return NextResponse.json({ error: "Custom Embedding node not found" }, { status: 404 });
         }
         const baseUrl = node.baseUrl?.replace(/\/$/, "");
@@ -147,7 +155,7 @@ export async function POST(request) {
 
       if (isAnthropicCompatibleProvider(provider)) {
         const node = await getProviderNodeById(provider);
-        if (!node) {
+        if (!node || isForeignRow(node, viewer)) {
           return NextResponse.json({ error: "Anthropic Compatible node not found" }, { status: 404 });
         }
 

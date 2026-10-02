@@ -5,6 +5,15 @@ import {
   updateProviderConnection,
   deleteProviderConnection,
 } from "@/models";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
+
+function isForeign(row, user) {
+  if (!user?.id) return false;
+  if (row?.userId && row.userId !== user.id) return true;
+  if (!row?.userId) return true;
+  return false;
+}
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -33,7 +42,7 @@ function normalizeProxyConfig(body = {}) {
   };
 }
 
-async function normalizeProxyPoolUpdate(proxyPoolIdInput) {
+async function normalizeProxyPoolUpdate(proxyPoolIdInput, viewer = null) {
   if (proxyPoolIdInput === undefined) {
     return { hasProxyPoolField: false, proxyPoolId: null };
   }
@@ -48,7 +57,8 @@ async function normalizeProxyPoolUpdate(proxyPoolIdInput) {
   }
 
   const proxyPool = await getProxyPoolById(proxyPoolId);
-  if (!proxyPool) {
+  // Pools may embed credentials → only the owner's pools may be attached.
+  if (!proxyPool || isForeignRow(proxyPool, viewer)) {
     return { hasProxyPoolField: true, error: "Proxy pool not found" };
   }
 
@@ -65,7 +75,7 @@ export async function GET(request, { params }) {
     const { id } = await params;
     const connection = await getProviderConnectionById(id);
 
-    if (!connection) {
+    if (!connection || isForeign(connection, await getRequestUser())) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
@@ -102,7 +112,7 @@ export async function PUT(request, { params }) {
     } = body;
 
     const existing = await getProviderConnectionById(id);
-    if (!existing) {
+    if (!existing || isForeign(existing, await getRequestUser())) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
@@ -111,7 +121,7 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: proxyConfig.error }, { status: 400 });
     }
 
-    const proxyPoolResult = await normalizeProxyPoolUpdate(body.proxyPoolId);
+    const proxyPoolResult = await normalizeProxyPoolUpdate(body.proxyPoolId, await getRequestUser().catch(() => null));
     if (proxyPoolResult.error) {
       return NextResponse.json({ error: proxyPoolResult.error }, { status: 400 });
     }
@@ -176,6 +186,10 @@ export async function DELETE(request, { params }) {
   try {
     const { id } = await params;
 
+    const existing = await getProviderConnectionById(id);
+    if (!existing || isForeign(existing, await getRequestUser())) {
+      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+    }
     const deleted = await deleteProviderConnection(id);
     if (!deleted) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });

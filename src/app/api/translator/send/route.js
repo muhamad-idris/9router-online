@@ -1,4 +1,5 @@
 import { getProviderConnections, updateProviderConnection } from "@/lib/localDb.js";
+import { getRequestUser } from "@/lib/auth/requestUser";
 import { getExecutor } from "open-sse/index.js";
 
 async function persistRefreshedCredentials(connection, newCredentials) {
@@ -40,7 +41,12 @@ export async function POST(request) {
       return Response.json({ success: false, error: "provider, model, and body required" }, { status: 400 });
     }
 
-    const connections = await getProviderConnections({ provider });
+    // Scope to the viewer's own connection in online mode (legacy: first).
+    let viewerId = null;
+    try {
+      viewerId = (await getRequestUser())?.id || null;
+    } catch {}
+    const connections = await getProviderConnections(viewerId ? { provider, userId: viewerId } : { provider });
     const connection = connections.find(c => c.isActive !== false);
     if (!connection) {
       return Response.json({ success: false, error: `No active connection for provider: ${provider}` }, { status: 400 });

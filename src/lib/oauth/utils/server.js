@@ -11,6 +11,18 @@ function isLoopbackOrigin(origin) {
   return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin);
 }
 
+// Owner attribution for browser-driven OAuth callbacks in online mode.
+// Dynamic import keeps this lib usable from plain-node CLI contexts
+// (next/headers is unavailable there) — failures fall back to shared rows.
+async function ownerIdFromSessionSafe() {
+  try {
+    const m = await import("@/lib/auth/connectionOwner");
+    return await m.ownerIdFromSession();
+  } catch {
+    return null;
+  }
+}
+
 
 /**
  * Start a local HTTP server to receive OAuth callback
@@ -238,6 +250,7 @@ export function startCodexProxy(appPort) {
             expiresAt: tokenData.expiresIn
               ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
               : null,
+            userId: await ownerIdFromSessionSafe(),
             testStatus: "active",
           });
 
@@ -380,6 +393,7 @@ export function startXaiProxy(appPort) {
             expiresAt: tokenData.expiresIn
               ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
               : null,
+            userId: await ownerIdFromSessionSafe(),
             testStatus: "active",
           });
 
@@ -506,6 +520,7 @@ export function startTraeProxy() {
           expiresAt: tokenData.expiresIn
             ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
             : null,
+          userId: await ownerIdFromSessionSafe(),
           testStatus: "active",
         });
         session.status = "done";
@@ -605,6 +620,7 @@ export function startWindsurfProxy() {
           provider: "windsurf",
           authType: "api_key",
           ...tokenData,
+          userId: await ownerIdFromSessionSafe(),
           testStatus: "active",
         });
         session.status = "done";
@@ -736,6 +752,7 @@ export function startZedProxy(preferredPort = 0) {
           provider: "zed",
           authType: "oauth",
           ...tokenData,
+          userId: await ownerIdFromSessionSafe(),
           testStatus: "active",
         });
         session.status = "done";

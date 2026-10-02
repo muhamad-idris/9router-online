@@ -4,8 +4,9 @@ import {
   clearAccountError,
   extractApiKey,
   isValidApiKey,
+  resolveRequestIdentity,
 } from "../services/auth.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getEffectiveSettings } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleEmbeddingsCore } from "open-sse/handlers/embeddingsCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -43,26 +44,26 @@ export async function handleEmbeddings(request) {
 
   log.request("POST", `${url.pathname} | ${modelStr}`);
 
-  // Log API key (masked)
+  // Log API key (masked) + resolve per-user identity for online mode
   const apiKey = extractApiKey(request);
+  const { userId: requestUserId } = await resolveRequestIdentity(request);
   if (apiKey) {
     log.debug("AUTH", `API Key: ${log.maskKey(apiKey)}`);
   } else {
     log.debug("AUTH", "No API key provided (local mode)");
   }
 
-  // Enforce API key if enabled in settings
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) {
-      log.warn("AUTH", "Missing API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
-      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-    }
+  // Enforce API keys: a presented key must map to an active account (unknown,
+  // revoked, or owner-blocked keys are rejected even when key enforcement is
+  // off — otherwise they'd fall back to the shared legacy pool).
+  const settings = await getEffectiveSettings(requestUserId);
+  if (apiKey && !(await isValidApiKey(apiKey))) {
+    log.warn("AUTH", "Invalid API key");
+    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+  }
+  if (settings.requireApiKey && !apiKey) {
+    log.warn("AUTH", "Missing API key (requireApiKey=true)");
+    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
   }
 
   if (!modelStr) {
@@ -75,7 +76,7 @@ export async function handleEmbeddings(request) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: input");
   }
 
-  const modelInfo = await getModelInfo(modelStr);
+  const modelInfo = await getModelInfo(modelStr, requestUserId);
   if (!modelInfo.provider) {
     log.warn("EMBEDDINGS", "Invalid model format", { model: modelStr });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
@@ -95,7 +96,7 @@ export async function handleEmbeddings(request) {
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { userId: requestUserId });
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
@@ -142,6 +143,7 @@ export async function handleEmbeddings(request) {
           model,
           connectionId: credentials.connectionId,
           apiKey,
+          userId: requestUserId || undefined,
           endpoint: url.pathname,
           tokens: usage,
           status: "success",

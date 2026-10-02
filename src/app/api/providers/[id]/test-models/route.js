@@ -3,7 +3,8 @@ import { getProviderConnectionById } from "@/lib/localDb";
 import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
-import { pingModelByKind } from "@/app/api/models/test/ping";
+import { pingModelByKind, getUserGatewayKey } from "@/app/api/models/test/ping";
+import { getRequestUser } from "@/lib/auth/requestUser";
 
 /**
  * POST /api/providers/[id]/test-models
@@ -17,10 +18,24 @@ export async function POST(request, { params }) {
     if (!connection) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
+    // Ownership check in online mode (legacy shared rows stay visible to admin).
+    try {
+      const viewer = await getRequestUser();
+      if (viewer?.id && connection.userId && connection.userId !== viewer.id) {
+        return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      }
+      if (viewer?.id && !connection.userId) {
+        return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      }
+    } catch {}
 
     const providerId = connection.provider;
     const isCompatible = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
     const alias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+
+    // Ping as the connection owner so per-user routing finds their credentials
+    // (pinging with another user's key would report "no active credentials").
+    const ownerKey = await getUserGatewayKey(connection.userId || null);
 
     let models = getProviderModels(alias);
 
@@ -45,13 +60,13 @@ export async function POST(request, { params }) {
     // This prevents race condition where multiple requests concurrently refresh the same token.
     const [first, ...rest] = models;
     const firstKind = first.kind || first.type || "llm";
-    const firstResult = await pingModelByKind(`${alias}/${first.id}`, firstKind, baseUrl);
+    const firstResult = await pingModelByKind(`${alias}/${first.id}`, firstKind, baseUrl, ownerKey);
     const results = [{ modelId: first.id, name: first.name || first.id, ...firstResult }];
 
     if (rest.length > 0) {
       const restResults = await Promise.all(
         rest.map(async (model) => {
-          const result = await pingModelByKind(`${alias}/${model.id}`, model.kind || model.type || "llm", baseUrl);
+          const result = await pingModelByKind(`${alias}/${model.id}`, model.kind || model.type || "llm", baseUrl, ownerKey);
           return { modelId: model.id, name: model.name || model.id, ...result };
         })
       );

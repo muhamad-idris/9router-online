@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 import { normalizeKiroExternalIdpAuth } from "@/lib/oauth/kiroExternalIdp";
 
 /**
@@ -15,6 +16,7 @@ export async function POST(request) {
     const connection = await createProviderConnection({
       provider: "kiro",
       authType: "oauth",
+      userId: await ownerIdFromSession(),
       accessToken: tokenData.accessToken,
       refreshToken: tokenData.refreshToken,
       expiresAt: tokenData.expiresAt,

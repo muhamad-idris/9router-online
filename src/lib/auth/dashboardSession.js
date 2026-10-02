@@ -34,14 +34,61 @@ export async function createDashboardAuthToken(claims = {}) {
   return new SignJWT({ authenticated: true, ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime("24h")
+    .setExpirationTime("7d")
     .sign(SECRET);
+}
+
+export async function createUserAuthToken(user) {
+  return createDashboardAuthToken({
+    userId: user.id,
+    email: user.email,
+    name: user.name || null,
+    loginMethod: "user",
+  });
+}
+
+export function getSessionUser(session) {
+  if (!session?.authenticated) return null;
+  // Bridge mode: SSO logins are disabled (see auth/oidc+saml routes).
+  // Tokens carrying SSO claims are never honored — otherwise an SSO user
+  // would land here without a users-table row and inherit full admin access.
+  if (!isSessionAllowed(session)) return null;
+  // Legacy single-password sessions have no userId — treat as instance admin.
+  if (!session.userId) return { id: null, email: null, name: "Admin", role: "admin" };
+  return {
+    id: session.userId,
+    email: session.email || null,
+    name: session.name || null,
+    role: "user",
+  };
+}
+
+// Central SSO kill-switch for session validation. OIDC/SAML endpoints are
+// independently disabled; this ensures stale SSO tokens cannot authenticate
+// anywhere even if one were somehow still issued.
+export function isSessionAllowed(session) {
+  if (!session) return false;
+  if (session.oidc || session.saml) return false;
+  return true;
 }
 
 export async function verifyDashboardAuthToken(token) {
   if (!token) return false;
   try {
-    await jwtVerify(token, SECRET);
+    const { payload } = await jwtVerify(token, SECRET);
+    // Registered users are re-validated against the users table on every
+    // verification so blocked or deleted accounts lose access immediately
+    // (JWTs are stateless). Legacy instance-admin sessions carry no userId
+    // and skip the lookup. Fail closed: a failed lookup rejects the token.
+    if (payload?.userId) {
+      try {
+        const { findUserById } = await import("@/lib/db/index.js");
+        const record = await findUserById(payload.userId);
+        if (!record || record.isActive === false) return false;
+      } catch {
+        return false;
+      }
+    }
     return true;
   } catch {
     return false;

@@ -5,6 +5,8 @@ import {
   getProxyPoolById,
   updateProxyPool,
 } from "@/models";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
 
 function normalizeProxyPoolUpdate(body = {}) {
   const updates = {};
@@ -59,6 +61,13 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
     }
 
+    // Pools may embed credentials → ownership check in online mode.
+    try {
+      if (isForeignRow(proxyPool, await getRequestUser())) {
+        return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
+      }
+    } catch {}
+
     return NextResponse.json({ proxyPool });
   } catch (error) {
     console.log("Error fetching proxy pool:", error);
@@ -75,6 +84,12 @@ export async function PUT(request, { params }) {
     if (!existing) {
       return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
     }
+
+    try {
+      if (isForeignRow(existing, await getRequestUser())) {
+        return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
+      }
+    } catch {}
 
     const body = await request.json();
     const normalized = normalizeProxyPoolUpdate(body);
@@ -101,7 +116,16 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
     }
 
-    const connections = await getProviderConnections();
+    let viewer = null;
+    try {
+      viewer = await getRequestUser();
+      if (isForeignRow(existing, viewer)) {
+        return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
+      }
+    } catch {}
+
+    // Bound check scoped to the owner (never block on another user's bindings).
+    const connections = await getProviderConnections(viewer?.id ? { userId: viewer.id } : {});
     const boundConnectionCount = countBoundConnections(connections, id);
 
     if (boundConnectionCount > 0) {

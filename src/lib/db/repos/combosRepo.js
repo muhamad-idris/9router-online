@@ -9,13 +9,18 @@ function rowToCombo(row) {
     name: row.name,
     kind: row.kind,
     models: parseJson(row.models, []),
+    userId: row.userId ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
-export async function getCombos() {
+export async function getCombos(filter = {}) {
   const db = await getAdapter();
+  if (filter.userId) {
+    const rows = db.all(`SELECT * FROM combos WHERE userId = ? ORDER BY createdAt ASC`, [filter.userId]);
+    return rows.map(rowToCombo);
+  }
   const rows = db.all(`SELECT * FROM combos ORDER BY createdAt ASC`);
   return rows.map(rowToCombo);
 }
@@ -26,8 +31,13 @@ export async function getComboById(id) {
   return rowToCombo(row);
 }
 
-export async function getComboByName(name) {
+export async function getComboByName(name, userId = null) {
   const db = await getAdapter();
+  if (userId) {
+    const row = db.get(`SELECT * FROM combos WHERE name = ? AND userId = ?`, [name, userId]);
+    if (row) return rowToCombo(row);
+    return null;
+  }
   const row = db.get(`SELECT * FROM combos WHERE name = ?`, [name]);
   return rowToCombo(row);
 }
@@ -40,12 +50,13 @@ export async function createCombo(data) {
     name: data.name,
     kind: data.kind || null,
     models: data.models || [],
+    userId: data.userId || null,
     createdAt: now,
     updatedAt: now,
   };
   db.run(
-    `INSERT INTO combos(id, name, kind, models, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
-    [combo.id, combo.name, combo.kind, stringifyJson(combo.models), combo.createdAt, combo.updatedAt]
+    `INSERT INTO combos(id, name, kind, models, userId, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+    [combo.id, combo.name, combo.kind, stringifyJson(combo.models), combo.userId, combo.createdAt, combo.updatedAt]
   );
   return combo;
 }

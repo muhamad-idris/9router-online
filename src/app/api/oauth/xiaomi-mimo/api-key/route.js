@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 
 /**
  * POST /api/oauth/xiaomi-mimo/api-key
@@ -59,10 +60,11 @@ export async function POST(request) {
       console.log("[xiaomi-mimo] key validation failed, storing as untested");
     }
 
-    // Dedup: same uid, same key, or same session identity+region
+    // Dedup: same uid, same key, or same session identity+region (scoped to owner)
     const { getProviderConnections, updateProviderConnection } = await import("@/models");
     const normRegion = (typeof region === "string" && region) || undefined;
-    const existing = (await getProviderConnections()).find(
+    const dedupOwnerId = await ownerIdFromSession();
+    const existing = (await getProviderConnections(dedupOwnerId ? { userId: dedupOwnerId } : {})).find(
       (c) => c.provider === "xiaomi-mimo" && (
         (uid && c.email === `${uid}@xiaomi`) ||
         (key && c.accessToken === key) ||
@@ -108,6 +110,7 @@ export async function POST(request) {
       // ([action]/route.js) — the list card and filters key off it; never
       // invent new values ("session" hid the row from the provider card).
       authType: sessionOnly ? "oauth" : "api_key",
+      userId: await ownerIdFromSession(),
       accessToken: key || null,
       refreshToken: null,
       // API keys don't expire on a fixed schedule; use a long horizon

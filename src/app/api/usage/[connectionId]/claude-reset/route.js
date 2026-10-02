@@ -2,6 +2,8 @@
 import "open-sse/index.js";
 
 import { getProviderConnectionById } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
 import { consumeClaudeResetGrant } from "open-sse/services/usage.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "../route.js";
@@ -14,6 +16,11 @@ export async function POST(request, { params }) {
 
     let connection = await getProviderConnectionById(connectionId);
     if (!connection) return Response.json({ error: "Connection not found" }, { status: 404 });
+    try {
+      if (isForeignRow(connection, await getRequestUser())) {
+        return Response.json({ error: "Connection not found" }, { status: 404 });
+      }
+    } catch {}
     if (connection.provider !== "claude" || connection.authType !== "oauth") {
       return Response.json({ error: "Limit reset is only available for Claude OAuth connections." }, { status: 400 });
     }

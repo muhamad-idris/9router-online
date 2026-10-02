@@ -15,14 +15,17 @@ const rotateState = new Map(); // providerId → { index }
  * random:      uniform random pick
  * none/single: return first entry
  */
-export function pickProxyPoolId(poolIds, strategy, providerId) {
+export function pickProxyPoolId(poolIds, strategy, providerId, scopeKey = "shared") {
   if (!poolIds || poolIds.length === 0) return null;
   if (poolIds.length === 1) return poolIds[0];
 
+  // Rotation state is scoped per caller (user) so one user's traffic does not
+  // shift another user's rotation position.
+  const stateKey = `${scopeKey}:${providerId}`;
   if (strategy === "round-robin") {
-    const state = rotateState.get(providerId) || { index: -1 };
+    const state = rotateState.get(stateKey) || { index: -1 };
     state.index = (state.index + 1) % poolIds.length;
-    rotateState.set(providerId, state);
+    rotateState.set(stateKey, state);
     return poolIds[state.index];
   }
 

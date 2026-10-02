@@ -5,6 +5,7 @@ import { Card, Button, Input } from "@/shared/components";
 
 export default function LoginPage() {
   const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [resetHint, setResetHint] = useState("");
   const [retryAfter, setRetryAfter] = useState(0);
@@ -73,7 +74,7 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify(email.trim() ? { email: email.trim(), password } : { password }),
       });
 
       if (res.ok) {
@@ -218,6 +219,17 @@ export default function LoginPage() {
                 )}
 
                 <div className="flex flex-col gap-2">
+                  <label className="text-sm font-medium">Email <span className="text-text-muted font-normal">(akun online — kosongkan untuk admin lokal)</span></label>
+                  <Input
+                    type="email"
+                    placeholder="you@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    autoComplete="email"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2">
                   <label className="text-sm font-medium">Password</label>
                   <Input
                     type="password"
@@ -250,6 +262,9 @@ export default function LoginPage() {
                   {retryAfter > 0 ? `Wait ${retryAfter}s` : "Login"}
                 </Button>
 
+                <p className="text-xs text-center text-text-muted mt-2">
+                  Belum punya akun? <a href="/register" className="text-primary underline">Daftar di sini</a>
+                </p>
                 <p className="text-xs text-center text-text-muted mt-2">
                   Default password is <code className="bg-sidebar px-1 rounded">123456</code>
                 </p>

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getProviderConnections } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
 import { backfillCodexEmails } from "@/lib/oauth/providers";
 import { USAGE_APIKEY_PROVIDERS, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
 
@@ -85,7 +86,12 @@ export async function GET(request) {
     const page = parsePositiveInt(searchParams.get("page"), 1);
     const pageSize = Math.min(parsePositiveInt(searchParams.get("pageSize"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
 
-    const allConnections = await getProviderConnections();
+    // Scope to the viewer's own connections in online mode (legacy: all).
+    let viewerId = null;
+    try {
+      viewerId = (await getRequestUser())?.id || null;
+    } catch {}
+    const allConnections = await getProviderConnections(viewerId ? { userId: viewerId } : {});
     const eligibleConnections = allConnections.filter(isUsageEligible);
     const providerOptions = Array.from(new Set(eligibleConnections.map((conn) => conn.provider))).sort();
 

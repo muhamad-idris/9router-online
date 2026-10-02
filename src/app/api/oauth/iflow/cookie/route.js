@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 
 /**
  * iFlow Cookie-Based Authentication
@@ -109,6 +110,7 @@ export async function POST(request) {
     const connection = await createProviderConnection({
       provider: "iflow",
       authType: "cookie",
+      userId: await ownerIdFromSession(),
       name: refreshedKey.name || keyData.name,
       email: refreshedKey.name || keyData.name,
       apiKey: refreshedKey.apiKey,

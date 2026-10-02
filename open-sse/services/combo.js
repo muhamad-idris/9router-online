@@ -205,12 +205,14 @@ function rotateModelsFromIndex(models, currentIndex) {
  * @param {number|string} [stickyLimit=1] - Requests per combo model before switching
  * @returns {string[]} Rotated models array
  */
-export function getRotatedModels(models, comboName, strategy, stickyLimit = 1) {
+export function getRotatedModels(models, comboName, strategy, stickyLimit = 1, scopeKey = "shared") {
   if (!models || models.length <= 1 || strategy !== "round-robin") {
     return models;
   }
 
-  const rotationKey = comboName || "__default__";
+  // Rotation state is scoped per caller (user) so two users sharing a combo
+  // name don't shift each other's round-robin position.
+  const rotationKey = `${scopeKey}::${comboName || "__default__"}`;
   const normalizedStickyLimit = normalizeStickyLimit(stickyLimit);
   const existingState = comboRotationState.get(rotationKey);
   const state = typeof existingState === "number"
@@ -239,9 +241,21 @@ export function getRotatedModels(models, comboName, strategy, stickyLimit = 1) {
 /**
  * Reset in-memory rotation state when combo/settings change
  * @param {string} [comboName] - Combo name to reset; omit to clear all
+ * @param {string} [scopeKey] - Owner scope; with comboName resets one entry,
+ *   without comboName resets that scope only, omit both to clear all
  */
-export function resetComboRotation(comboName) {
-  if (comboName) comboRotationState.delete(comboName);
+export function resetComboRotation(comboName, scopeKey) {
+  if (comboName && scopeKey) comboRotationState.delete(`${scopeKey}::${comboName}`);
+  else if (comboName) {
+    for (const key of [...comboRotationState.keys()]) {
+      if (key === comboName || key.endsWith(`::${comboName}`)) comboRotationState.delete(key);
+    }
+  }
+  else if (scopeKey) {
+    for (const key of [...comboRotationState.keys()]) {
+      if (key.startsWith(`${scopeKey}::`)) comboRotationState.delete(key);
+    }
+  }
   else comboRotationState.clear();
 }
 
@@ -275,11 +289,12 @@ export function getComboModelsFromData(modelStr, combosData) {
  * @param {string} [options.comboName] - Name of the combo (for round-robin tracking)
  * @param {string} [options.comboStrategy] - Strategy: "fallback" or "round-robin"
  * @param {number|string} [options.comboStickyLimit=1] - Requests per combo model before switching
+ * @param {string} [options.userId] - Owner scope for round-robin state (per-user rotation)
  * @returns {Promise<Response>}
  */
-export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true }) {
+export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true, userId = null }) {
   // Apply rotation strategy if enabled
-  let rotatedModels = getRotatedModels(models, comboName, comboStrategy, comboStickyLimit);
+  let rotatedModels = getRotatedModels(models, comboName, comboStrategy, comboStickyLimit, userId || "shared");
 
   // Auto-switch: float models that satisfy the request's required capabilities to the front.
   if (autoSwitch) {

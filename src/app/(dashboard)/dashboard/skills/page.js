@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Card, Badge } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import {
@@ -73,6 +74,27 @@ function SkillRow({ skill }) {
 }
 
 export default function SkillsPage() {
+  const [forbidden, setForbidden] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/auth/status", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((status) => {
+        if (status?.user?.id) setForbidden(true);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (forbidden) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Card padding="md">
+          <p className="text-sm text-text-muted">Admin only — skills catalog is restricted to the instance admin.</p>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <Card padding="md">

@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, verifyUserCredentials } from "@/lib/localDb";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
-import { isOidcConfigured } from "@/lib/auth/oidc";
-import { isSamlConfigured } from "@/lib/auth/saml.js";
 import { checkLock, recordFail, recordSuccess, getClientIp } from "@/lib/auth/loginLimiter";
 import { isLocalRequest } from "@/dashboardGuard";
 
@@ -29,8 +27,32 @@ export async function POST(request) {
       );
     }
 
-    const { password } = await request.json();
+    const { password, email } = await request.json();
     const settings = await getSettings();
+
+    // Online multi-user path: email + password against the users table.
+    if (email) {
+      const user = await verifyUserCredentials(email, password);
+      if (!user) {
+        const { remainingBeforeLock } = recordFail(ip);
+        return NextResponse.json(
+          { error: `Invalid email or password. ${remainingBeforeLock} attempt(s) left before lockout.`, remainingBeforeLock },
+          { status: 401 }
+        );
+      }
+      recordSuccess(ip);
+      const cookieStore = await cookies();
+      await setDashboardAuthCookie(cookieStore, request, {
+        userId: user.id,
+        email: user.email,
+        name: user.name,
+        loginMethod: "user",
+      });
+      return NextResponse.json(
+        { success: true, mustChangePassword: false, user },
+        { headers: NO_STORE_HEADERS }
+      );
+    }
 
     // Block login via tunnel/tailscale if dashboard access is disabled
     if (isTunnelRequest(request, settings) && settings.tunnelDashboardAccess !== true) {
@@ -40,15 +62,9 @@ export async function POST(request) {
     // Default password is '123456' if not set
     const storedHash = settings.password;
 
-    if (settings.authMode === "sso" || settings.authMode === "saml" || settings.authMode === "oidc") {
-      const ssoType = settings.ssoType || (settings.authMode === "saml" ? "saml" : "oidc");
-      if (ssoType === "saml" && isSamlConfigured(settings)) {
-        return NextResponse.json({ error: "Password login is disabled. Use SAML SSO sign in." }, { status: 403 });
-      }
-      if (ssoType === "oidc" && isOidcConfigured(settings)) {
-        return NextResponse.json({ error: "Password login is disabled. Use OIDC sign in." }, { status: 403 });
-      }
-    }
+    // Bridge mode: SSO is disabled — password login is always available.
+    // (Upstream blocked password login when SSO-only was configured; those
+    // endpoints now return 403, so this gate would only lock everyone out.)
 
     let isValid = false;
     if (storedHash) {

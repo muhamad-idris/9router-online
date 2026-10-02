@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUsageStats } from "@/lib/usageDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
 
 const VALID_PERIODS = new Set(["today", "24h", "7d", "30d", "60d", "all"]);
 
@@ -14,7 +15,9 @@ export async function GET(request) {
       return NextResponse.json({ error: "Invalid period" }, { status: 400 });
     }
 
-    const stats = await getUsageStats(period);
+    // Registered users see only their own usage; admin (user null) sees all.
+    const viewer = await getRequestUser();
+    const stats = await getUsageStats(period, viewer?.id ? { userId: viewer.id } : {});
     return NextResponse.json(stats);
   } catch (error) {
     console.error("[API] Failed to get usage stats:", error);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDistinctProviders } from "@/lib/requestDetailsDb";
 import { getProviderNodes } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
 import { AI_PROVIDERS, getProviderByAlias } from "@/shared/constants/providers";
 
 /**
@@ -10,8 +11,10 @@ import { AI_PROVIDERS, getProviderByAlias } from "@/shared/constants/providers";
 export async function GET() {
   try {
     // Query DISTINCT provider column directly — avoids parsing every row's
-    // full JSON blob (can be hundreds of MB), which previously caused OOM.
-    const providerIds = await getDistinctProviders();
+    // full JSON blob (which can be hundreds of MB), which previously caused OOM.
+    // Registered users only see providers from their own requests.
+    const viewer = await getRequestUser();
+    const providerIds = await getDistinctProviders(viewer?.id || null);
 
     const providerNodes = await getProviderNodes();
     const nodeMap = {};

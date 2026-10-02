@@ -80,9 +80,18 @@ export default function APIPageClient({ machineId }) {
 
   // Client-side local/remote detection (UI hint only, not a security gate)
   const [isRemoteHost, setIsRemoteHost] = useState(false);
+  // Bridge mode: tunnel controls are instance-admin only (server enforces 403).
+  // Default true to avoid flicker-hiding for the admin.
+  const [isAdmin, setIsAdmin] = useState(true);
   useEffect(() => {
     if (typeof window !== "undefined")
       setIsRemoteHost(!["localhost", "127.0.0.1", "::1"].includes(window.location.hostname));
+    fetch("/api/auth/status", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setIsAdmin(data.authenticated === true && !data.user);
+      })
+      .catch(() => {});
   }, []);
 
   const { copied, copy } = useCopyToClipboard();
@@ -727,7 +736,8 @@ export default function APIPageClient({ machineId }) {
             copied={copied}
             onCopy={copy}
           />
-          {/* Cloudflare Tunnel */}
+          {/* Cloudflare Tunnel (admin only) */}
+          {isAdmin && (
           <div className="flex items-center gap-2">
             <span className={`text-xs font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[88px] text-center ${
               tunnelEnabled ? "bg-primary/10 text-primary" : "bg-surface-2 text-text-muted"
@@ -819,7 +829,9 @@ export default function APIPageClient({ machineId }) {
               </Button>
             )}
           </div>
-          {/* Tailscale */}
+          )}
+          {/* Tailscale (admin only) */}
+          {isAdmin && (
           <div className="flex items-center gap-2">
             <span className={`text-xs font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[88px] text-center ${
               tsEnabled ? "bg-primary/10 text-primary" : "bg-surface-2 text-text-muted"
@@ -903,10 +915,11 @@ export default function APIPageClient({ machineId }) {
               </Button>
             )}
           </div>
+          )}
         </div>
 
-        {/* Pre-enable security gate banner */}
-        {isLoginUnsafe && !tunnelEnabled && !tsEnabled && (
+        {/* Pre-enable security gate banner (admin only) */}
+        {isAdmin && isLoginUnsafe && !tunnelEnabled && !tsEnabled && (
           <div className="mt-4">
             <SecurityWarning
               message={unsafeReason}
@@ -915,8 +928,8 @@ export default function APIPageClient({ machineId }) {
           </div>
         )}
 
-        {/* Security warnings when tunnel or tailscale is active */}
-        {(tunnelEnabled || tsEnabled) && (
+        {/* Security warnings when tunnel or tailscale is active (admin only) */}
+        {isAdmin && (tunnelEnabled || tsEnabled) && (
           <div className="mt-4 flex flex-col gap-2">
             {!requireApiKey && (
               <SecurityWarning
@@ -940,8 +953,8 @@ export default function APIPageClient({ machineId }) {
           </div>
         )}
 
-        {/* Tunnel dashboard access option */}
-        {(tunnelEnabled || tsEnabled) && (
+        {/* Tunnel dashboard access option (admin only) */}
+        {isAdmin && (tunnelEnabled || tsEnabled) && (
           <div className="mt-4 pt-4 border-t border-border flex items-center gap-3">
             <Toggle
               checked={tunnelDashboardAccess}
@@ -1139,7 +1152,7 @@ export default function APIPageClient({ machineId }) {
 
       {/* Enable Tunnel Modal */}
       <Modal
-        isOpen={showEnableTunnelModal}
+        isOpen={isAdmin && showEnableTunnelModal}
         title="Enable Tunnel"
         onClose={() => setShowEnableTunnelModal(false)}
       >
@@ -1183,7 +1196,7 @@ export default function APIPageClient({ machineId }) {
 
       {/* Disable Cloudflare Tunnel Modal */}
       <Modal
-        isOpen={showDisableTunnelModal}
+        isOpen={isAdmin && showDisableTunnelModal}
         title="Disable Tunnel"
         onClose={() => !tunnelLoading && setShowDisableTunnelModal(false)}
       >
@@ -1200,7 +1213,7 @@ export default function APIPageClient({ machineId }) {
 
       {/* Tailscale Modal */}
       <Modal
-        isOpen={showTsModal}
+        isOpen={isAdmin && showTsModal}
         title="Tailscale Funnel"
         onClose={() => { if (!tsInstalling) { setShowTsModal(false); setTsSudoPassword(""); setTsStatus(null); } }}
       >
@@ -1268,7 +1281,7 @@ export default function APIPageClient({ machineId }) {
 
       {/* Disable Tailscale Modal */}
       <Modal
-        isOpen={showDisableTsModal}
+        isOpen={isAdmin && showDisableTsModal}
         title="Disable Tailscale"
         onClose={() => !tsLoading && setShowDisableTsModal(false)}
       >

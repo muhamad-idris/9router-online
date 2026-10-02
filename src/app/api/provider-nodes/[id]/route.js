@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { deleteProviderConnectionsByProvider, deleteProviderNode, getProviderConnections, getProviderNodeById, updateProviderConnection, updateProviderNode } from "@/models";
+import { deleteProviderConnection, deleteProviderConnectionsByProvider, deleteProviderNode, getProviderConnections, getProviderNodeById, updateProviderConnection, updateProviderNode } from "@/models";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
 
 // PUT /api/provider-nodes/[id] - Update provider node
 export async function PUT(request, { params }) {
@@ -10,6 +12,15 @@ export async function PUT(request, { params }) {
     const node = await getProviderNodeById(id);
 
     if (!node) {
+      return NextResponse.json({ error: "Provider node not found" }, { status: 404 });
+    }
+
+    // Ownership check in online mode.
+    let viewer = null;
+    try {
+      viewer = await getRequestUser();
+    } catch {}
+    if (isForeignRow(node, viewer)) {
       return NextResponse.json({ error: "Provider node not found" }, { status: 404 });
     }
 
@@ -60,7 +71,10 @@ export async function PUT(request, { params }) {
 
     const updated = await updateProviderNode(id, updates);
 
-    const connections = await getProviderConnections({ provider: id });
+    // Cascade to the owner's connections on this node only (never another user's).
+    const connections = await getProviderConnections(
+      viewer?.id ? { provider: id, userId: viewer.id } : { provider: id }
+    );
     await Promise.all(connections.map((connection) => (
       updateProviderConnection(connection.id, {
         providerSpecificData: {
@@ -90,7 +104,24 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ error: "Provider node not found" }, { status: 404 });
     }
 
-    await deleteProviderConnectionsByProvider(id);
+    // Ownership check in online mode.
+    let viewer = null;
+    try {
+      viewer = await getRequestUser();
+    } catch {}
+    if (isForeignRow(node, viewer)) {
+      return NextResponse.json({ error: "Provider node not found" }, { status: 404 });
+    }
+
+    // Delete only the owner's connections on this node (never another user's).
+    if (viewer?.id) {
+      const owned = await getProviderConnections({ provider: id, userId: viewer.id });
+      for (const c of owned) {
+        await deleteProviderConnection(c.id);
+      }
+    } else {
+      await deleteProviderConnectionsByProvider(id);
+    }
     await deleteProviderNode(id);
 
     return NextResponse.json({ success: true });

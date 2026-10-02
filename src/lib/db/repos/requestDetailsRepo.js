@@ -107,6 +107,7 @@ async function flushToDatabase() {
             provider: item.provider || null,
             model: item.model || null,
             connectionId: item.connectionId || null,
+            userId: item.userId || null,
             timestamp: item.timestamp,
             status: item.status || null,
             latency: item.latency || {},
@@ -119,8 +120,8 @@ async function flushToDatabase() {
           };
 
           db.run(
-            `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, status, data) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, status = excluded.status, data = excluded.data`,
-            [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.status, stringifyJson(record)]
+            `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, userId, status, data) VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, userId = excluded.userId, status = excluded.status, data = excluded.data`,
+            [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.userId, record.status, stringifyJson(record)]
           );
         }
 
@@ -167,6 +168,7 @@ export async function getRequestDetails(filter = {}) {
   if (filter.provider) { conds.push("provider = ?"); params.push(filter.provider); }
   if (filter.model) { conds.push("model = ?"); params.push(filter.model); }
   if (filter.connectionId) { conds.push("connectionId = ?"); params.push(filter.connectionId); }
+  if (filter.userId) { conds.push("userId = ?"); params.push(filter.userId); }
   if (filter.status) { conds.push("status = ?"); params.push(filter.status); }
   if (filter.startDate) { conds.push("timestamp >= ?"); params.push(new Date(filter.startDate).toISOString()); }
   if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
@@ -192,9 +194,12 @@ export async function getRequestDetails(filter = {}) {
   };
 }
 
-export async function getDistinctProviders() {
+export async function getDistinctProviders(userId = null) {
   const db = await getAdapter();
-  const rows = db.all(`SELECT DISTINCT provider FROM requestDetails WHERE provider IS NOT NULL ORDER BY provider ASC`);
+  const rows = db.all(
+    `SELECT DISTINCT provider FROM requestDetails WHERE provider IS NOT NULL${userId ? " AND userId = ?" : ""} ORDER BY provider ASC`,
+    userId ? [userId] : [],
+  );
   return rows.map((r) => r.provider);
 }
 

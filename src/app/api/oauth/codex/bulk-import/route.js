@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 import { extractCodexAccountInfo } from "@/lib/oauth/providers";
 
 /**
@@ -107,6 +108,9 @@ export async function POST(request) {
         provider: "codex",
         authType: "oauth",
         ...item,
+        // Authoritative owner: placed after the spread so imported JSON
+        // can never reassign the connection to another user.
+        userId: await ownerIdFromSession(),
       });
 
       results.push({ index: i, ok: true, id: created.id });

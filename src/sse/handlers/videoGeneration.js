@@ -4,13 +4,15 @@ import {
   clearAccountError,
   extractApiKey,
   isValidApiKey,
+  resolveRequestIdentity,
 } from "../services/auth.js";
-import { getSettings, getProviderConnectionById } from "@/lib/localDb";
+import { getSettings, getEffectiveSettings, getProviderConnectionById } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleVideoProxyCore, getVideoConfig, sanitizeSecrets } from "open-sse/handlers/videoCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
+import { recordEndpointUsage } from "../services/usage.js";
 import * as log from "../utils/logger.js";
 
 // Video generation is xAI-only today; requests without a provider prefix
@@ -22,10 +24,13 @@ const DEFAULT_VIDEO_PROVIDER = "xai";
  * connection (`x-connection-id`, returned on create) or an explicit
  * `?provider=` — falling back to the historical xAI default.
  */
-async function resolveGetProvider(request, connectionId) {
+async function resolveGetProvider(request, connectionId, requestUserId = null) {
   if (connectionId) {
     const conn = await getProviderConnectionById(connectionId).catch(() => null);
-    if (conn?.provider && getVideoConfig(conn.provider)) return conn.provider;
+    // Ownership check: a foreign connection id must neither oracle-exist nor
+    // route — treat as absent and fall through to ?provider=/default below.
+    const owned = !conn || (!requestUserId && !conn.userId) || (requestUserId && conn.userId === requestUserId);
+    if (owned && conn?.provider && getVideoConfig(conn.provider)) return conn.provider;
   }
   const queried = new URL(request.url).searchParams.get("provider");
   if (queried && getVideoConfig(queried)) return queried;
@@ -43,13 +48,16 @@ const CREATE_ROTATION_STATUSES = new Set([
 
 async function requireValidApiKey(request) {
   const apiKey = extractApiKey(request);
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+  const { userId: requestUserId } = await resolveRequestIdentity(request);
+  const settings = await getEffectiveSettings(requestUserId);
+  // Fail closed: a presented key must map to an active account.
+  if (apiKey && !(await isValidApiKey(apiKey))) {
+    return { authError: errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key"), requestUserId, apiKey };
   }
-  return null;
+  if (settings.requireApiKey && !apiKey) {
+    return { authError: errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key"), requestUserId, apiKey };
+  }
+  return { authError: null, requestUserId, apiKey };
 }
 
 /**
@@ -75,11 +83,11 @@ async function readForwardableBody(request) {
   return { raw: buf, parsed: null, contentType };
 }
 
-async function resolveVideoProvider(parsedBody) {
+async function resolveVideoProvider(parsedBody, requestUserId = null) {
   if (!parsedBody?.model) return { provider: DEFAULT_VIDEO_PROVIDER, model: null };
 
   const modelStr = String(parsedBody.model);
-  const modelInfo = await getModelInfo(modelStr);
+  const modelInfo = await getModelInfo(modelStr, requestUserId);
   if (!modelInfo.provider) {
     return { error: errorResponse(HTTP_STATUS.BAD_REQUEST, "Combos are not supported for video generation") };
   }
@@ -107,13 +115,13 @@ function withConnectionHeader(response, connectionId) {
  * POST /v1/videos/{generations|edits|extensions} — async job creation proxy.
  */
 export async function handleVideoCreate(request, action) {
-  const authError = await requireValidApiKey(request);
+  const { authError, requestUserId, apiKey } = await requireValidApiKey(request);
   if (authError) return authError;
 
   const bodyInfo = await readForwardableBody(request);
   if (bodyInfo.error) return bodyInfo.error;
 
-  const resolved = await resolveVideoProvider(bodyInfo.parsed);
+  const resolved = await resolveVideoProvider(bodyInfo.parsed, requestUserId);
   if (resolved.error) return resolved.error;
   const { provider, model } = resolved;
 
@@ -132,7 +140,7 @@ export async function handleVideoCreate(request, action) {
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId, userId: requestUserId });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {
@@ -170,6 +178,7 @@ export async function handleVideoCreate(request, action) {
     if (result.success) {
       await clearAccountError(credentials.connectionId, credentials, model);
       log.info("VIDEO", `${provider.toUpperCase()} | ${action} accepted (connection ${credentials.connectionId})`);
+      recordEndpointUsage({ provider, model: model || "video", connectionId: credentials.connectionId, userId: requestUserId, apiKey, endpoint: "/v1/videos" });
       return withConnectionHeader(result.response, credentials.connectionId);
     }
 
@@ -195,15 +204,15 @@ export async function handleVideoCreate(request, action) {
  * caller pins the creating account via `x-connection-id` (returned on create).
  */
 export async function handleVideoGet(request, requestId) {
-  const authError = await requireValidApiKey(request);
+  const { authError, requestUserId } = await requireValidApiKey(request);
   if (authError) return authError;
 
   if (!requestId) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing video request id");
 
   const preferredConnectionId = request.headers.get("x-connection-id") || null;
-  const provider = await resolveGetProvider(request, preferredConnectionId);
+  const provider = await resolveGetProvider(request, preferredConnectionId, requestUserId);
 
-  const credentials = await getProviderCredentials(provider, null, null, { preferredConnectionId });
+  const credentials = await getProviderCredentials(provider, null, null, { preferredConnectionId, userId: requestUserId });
   if (!credentials || credentials.allRateLimited) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
   }

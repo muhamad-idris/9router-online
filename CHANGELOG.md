@@ -1,3 +1,31 @@
+# v0.6.0 (2026-10-02)
+
+Multi-user bridge release: shared instances with email/password accounts, full per-user isolation, and host-level hardening.
+
+## Features
+- **Auth**: register/login with email + password and 7-day JWT sessions; SSO (OIDC/SAML) fully disabled — SSO-claim tokens are rejected everywhere; session users are re-validated against the users table on every request/verification so blocked or deleted accounts lose access immediately
+- **Isolation**: per-user scoping for API keys, provider connections/OAuth tokens, combos (incl. rotation state), proxy pools, provider nodes, settings overrides (allowlist), and all dashboard APIs; gateway keys resolve to their owner for usage attribution
+- **Gateway auth**: fail-closed key checks on every `/v1*` handler — a presented key must map to an active key of an active owner regardless of the `requireApiKey` setting; unknown/revoked/blocked keys return 401 `invalid_api_key` and never fall through to a provider
+- **Roles**: instance admin (legacy password session or CLI token) vs registered users; host-level families (cli-tools, headroom, pxpipe, tunnel, version update/shutdown, suggested-models) are admin-only in bridge mode (`requireLogin=true`); unauthenticated requests fall through to the standard 401 gates, registered users get 403, local mode keeps full operator access
+- **User management**: `/dashboard/users` — list, block/unblock, reset password, delete (cascades keys, connections, nodes, pools, combos, usage, settings)
+- **Usage**: stats/chart/logs/history/active requests/request details + provider lists scoped per user (admin sees all); non-chat endpoints (embeddings, TTS, STT, images, videos, search, web fetch) record usage with `userId` + endpoint
+- **Dashboard**: role-aware sidebar (admin-only CLI tools/update UI), admin-only section on the profile page, tunnel rows admin-gated on the endpoint page
+- **System menus admin-only**: Proxy Pools, Skills, Console Log, 9Remote, and 9English sidebar items are hidden for registered users (local mode still shows everything); `/api/proxy-pools*` and `/api/translator/console-logs*` (incl. SSE stream) return 403 for registered users, 401 when unauthenticated, and stay open in local mode; the three pages show an "Admin only" notice on direct URL access; the Proxy Pool picker in the connection form only appears when pools are listable (Translator feature routes untouched)
+
+## Security
+- **Blocked-session leak (fixed)**: a blocked/deleted user's still-valid JWT previously passed the dashboard guard and resolved to global usage data — `verifyDashboardAuthToken` now re-checks user liveness and fails closed
+- Admin-only gate runs before the permissive paths but after local-only checks; SSO-claim tokens rejected in `hasValidToken` and the dashboard redirect path; `/api/auth/register` stays public so users can self-signup, after which admins manage their accounts
+- Custom-server IP derivation unchanged: attacker-controlled `X-Forwarded-For` stripped, trusted peer headers only honored from loopback reverse proxy
+
+## Fixes
+- **Tests**: auth/settings mocks brought in line with per-user identity resolution and effective settings (7 files: embeddings, fetch, xai video, gemini-live stt, antigravity quota, v1 model lookup, dashboard guard); suite verified regression-free against pristine HEAD via `tests/__baseline__/verify-no-regression.mjs` (expected-red list byte-identical before/after)
+
+## Deployment notes (bridge)
+- Set strong unique `JWT_SECRET`, `API_KEY_SECRET`, `MACHINE_ID_SALT`, and a non-default `INITIAL_PASSWORD` (change it right after first login); set `AUTH_COOKIE_SECURE=true` when served over HTTPS
+- API-key enforcement is the dashboard setting **requireApiKey** (Settings → API keys, default ON) — the `REQUIRE_API_KEY` env var is not read by the runtime
+- `requireLogin=true` is bridge mode: dashboard login required, admin-only host endpoints enforced; `requireLogin=false` is local single-operator mode (unchanged upstream behavior)
+- The local operator/admin identity is the session without a users-table row; registered users never get host-level access
+
 # v0.5.95 (2026-10-01)
 
 ## Features

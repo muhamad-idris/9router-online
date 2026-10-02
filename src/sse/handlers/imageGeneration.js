@@ -4,14 +4,16 @@ import {
   clearAccountError,
   extractApiKey,
   isValidApiKey,
+  resolveRequestIdentity,
 } from "../services/auth.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getEffectiveSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleImageGenerationCore } from "open-sse/handlers/imageGenerationCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat } from "open-sse/services/combo.js";
+import { recordEndpointUsage } from "../services/usage.js";
 import * as log from "../utils/logger.js";
 
 // Providers that don't require credentials (noAuth)
@@ -36,18 +38,17 @@ export async function handleImageGeneration(request) {
   const modelStr = body.model;
 
   const apiKey = extractApiKey(request);
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-  }
+  const { userId: requestUserId } = await resolveRequestIdentity(request);
+  const settings = await getEffectiveSettings(requestUserId);
+  // Fail closed: a presented key must map to an active account.
+  if (apiKey && !(await isValidApiKey(apiKey))) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+  if (settings.requireApiKey && !apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
 
   if (!modelStr) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
   if (!body.prompt) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: prompt");
 
   // Combo expansion: model may be a combo name → run fallback/round-robin across models
-  const comboModels = await getComboModels(modelStr);
+  const comboModels = await getComboModels(modelStr, requestUserId);
   if (comboModels) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[modelStr]?.fallbackStrategy || settings.comboStrategy || "fallback";
@@ -56,19 +57,20 @@ export async function handleImageGeneration(request) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleModelImage(b, m, { wantsStream, binaryOutput, preferredConnectionId }),
+      handleSingleModel: (b, m) => handleSingleModelImage(b, m, { wantsStream, binaryOutput, preferredConnectionId, requestUserId, apiKey }),
       log,
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit,
+      userId: requestUserId,
     });
   }
 
-  return handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId });
+  return handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId, requestUserId, apiKey });
 }
 
-async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId } = {}) {
-  const modelInfo = await getModelInfo(modelStr);
+async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId, requestUserId = null, apiKey = null } = {}) {
+  const modelInfo = await getModelInfo(modelStr, requestUserId);
   if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
 
   const { provider, model } = modelInfo;
@@ -81,7 +83,10 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
       credentials: null,
       binaryOutput,
     });
-    if (result.success) return result.response;
+    if (result.success) {
+      recordEndpointUsage({ provider, model, userId: requestUserId, apiKey, endpoint: "/v1/images/generations" });
+      return result.response;
+    }
     return errorResponse(result.status || HTTP_STATUS.BAD_GATEWAY, result.error || "Image generation failed");
   }
 
@@ -91,7 +96,7 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId, userId: requestUserId });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {
@@ -126,7 +131,10 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
       }
     });
 
-    if (result.success) return result.response;
+    if (result.success) {
+      recordEndpointUsage({ provider, model, connectionId: credentials.connectionId, userId: requestUserId, apiKey, endpoint: "/v1/images/generations" });
+      return result.response;
+    }
 
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
 

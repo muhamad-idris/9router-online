@@ -27,17 +27,18 @@ const navItems = [
   { href: "/dashboard/quota", label: "Quota Tracker", icon: "data_usage" },
   { href: "/dashboard/token-saver", label: "Token Saver", icon: "savings" },
   // { href: "/dashboard/pxpipe", label: "PXPIPE", icon: "image" },
-  { href: "/dashboard/cli-tools", label: "CLI Tools", icon: "terminal" },
+  { href: "/dashboard/cli-tools", label: "CLI Tools", icon: "terminal", adminOnly: true },
+  { href: "/dashboard/users", label: "Users", icon: "group", adminOnly: true },
 ];
 
 const debugItems = [
-  { href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },
+  { href: "/dashboard/console-log", label: "Console Log", icon: "terminal", adminOnly: true },
   { href: "/dashboard/translator", label: "Translator", icon: "translate" },
 ];
 
 const systemItems = [
-  { href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "lan" },
-  { href: "/dashboard/skills", label: "Skills", icon: "extension" },
+  { href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "lan", adminOnly: true },
+  { href: "/dashboard/skills", label: "Skills", icon: "extension", adminOnly: true },
 ];
 
 export default function Sidebar({ onClose }) {
@@ -50,6 +51,10 @@ export default function Sidebar({ onClose }) {
   const [isUpdating, setIsUpdating] = useState(false);
   const [shutdownCountdown, setShutdownCountdown] = useState(0);
   const [enableTranslator, setEnableTranslator] = useState(false);
+  // Bridge mode: hide host-level menus/actions for registered users.
+  // Enforcement lives server-side (dashboardGuard ADMIN_ONLY); this is UX only.
+  // Default true to avoid flicker-hiding for the instance admin.
+  const [isAdmin, setIsAdmin] = useState(true);
   const { copied, copy } = useCopyToClipboard(2000);
 
   const INSTALL_CMD = UPDATER_CONFIG.installCmdLatest;
@@ -58,6 +63,12 @@ export default function Sidebar({ onClose }) {
     useSettingsStore.getState().fetchSettings().then((data) => {
       if (data?.enableTranslator) setEnableTranslator(true);
     });
+    fetch("/api/auth/status", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setIsAdmin(data.requireLogin === false || (data.authenticated === true && !data.user));
+      })
+      .catch(() => {});
   }, []);
 
   // Lazy check for new npm version in background after initial render
@@ -133,7 +144,7 @@ export default function Sidebar({ onClose }) {
               <span className="text-xs text-text-muted">v{APP_CONFIG.version}</span>
             </div>
           </Link>
-          {updateInfo && (
+          {updateInfo && isAdmin && (
             <div className="flex flex-col gap-1.5 rounded p-1 -m-1">
               <span className="text-xs font-semibold text-green-600 dark:text-amber-500">
                 ↑ New version available: v{updateInfo.latestVersion}
@@ -161,7 +172,7 @@ export default function Sidebar({ onClose }) {
 
         {/* Navigation */}
         <nav className="flex-1 px-4 py-2 space-y-0.5 overflow-y-auto custom-scrollbar">
-          {navItems.map((item) => (
+          {(isAdmin ? navItems : navItems.filter((item) => !item.adminOnly)).map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -242,7 +253,7 @@ export default function Sidebar({ onClose }) {
               </div>
             )}
 
-            {systemItems.map((item) => (
+            {(isAdmin ? systemItems : systemItems.filter((item) => !item.adminOnly)).map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
@@ -267,7 +278,7 @@ export default function Sidebar({ onClose }) {
             ))}
 
             {/* Debug items (inside System section, before Settings) */}
-            {debugItems.map((item) => {
+            {(isAdmin ? debugItems : debugItems.filter((item) => !item.adminOnly)).map((item) => {
               const show = item.href !== "/dashboard/translator" || enableTranslator;
               return show ? (
                 <Link
@@ -295,6 +306,7 @@ export default function Sidebar({ onClose }) {
             })}
 
             {/* Remote */}
+            {isAdmin && (
             <button
               onClick={() => setShowRemoteModal(true)}
               className={cn(
@@ -310,8 +322,10 @@ export default function Sidebar({ onClose }) {
                 HOT
               </span>
             </button>
+            )}
 
             {/* 9English */}
+            {isAdmin && (
             <a
               href="https://9english.net/"
               target="_blank"
@@ -327,6 +341,7 @@ export default function Sidebar({ onClose }) {
               </span>
               <span className="text-[13px] font-medium">9English</span>
             </a>
+            )}
 
             {/* Settings */}
             <Link
@@ -357,9 +372,9 @@ export default function Sidebar({ onClose }) {
       {/* Remote Promo Modal */}
       <NineRemotePromoModal isOpen={showRemoteModal} onClose={() => setShowRemoteModal(false)} />
 
-      {/* Update Confirmation Modal */}
+      {/* Update Confirmation Modal (admin only — update/shutdown is admin-gated server-side) */}
       <ConfirmModal
-        isOpen={showUpdateModal}
+        isOpen={showUpdateModal && isAdmin}
         onClose={() => setShowUpdateModal(false)}
         onConfirm={handleUpdate}
         title="Update 9Router"

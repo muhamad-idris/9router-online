@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getSettings, updateSettings } from "@/lib/localDb";
+import { getEffectiveSettings, updateSettings, updateUserSettings } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
 import { PROVIDERS } from "open-sse/config/providers.js";
 import { resolveProviderAlias } from "open-sse/services/model.js";
 
@@ -58,8 +59,9 @@ function normalizeOverride({ headers }) {
   return { override: Object.keys(out).length ? out : null };
 }
 
-async function readOverrides() {
-  const settings = await getSettings();
+async function readOverrides(userId = null) {
+  // Bridge mode: registered users read their effective (global + own) overrides.
+  const settings = userId ? await getEffectiveSettings(userId) : await getEffectiveSettings(null);
   return settings.providerOverrides || {};
 }
 
@@ -71,7 +73,11 @@ export async function GET(request, { params }) {
     const { id } = await params;
     // URL may use an alias (gcli, cc…) — key everything by canonical registry id
     const canonical = resolveProviderAlias(id);
-    const override = (await readOverrides())[canonical] || {};
+    let viewerId = null;
+    try {
+      viewerId = (await getRequestUser())?.id || null;
+    } catch {}
+    const override = (await readOverrides(viewerId))[canonical] || {};
     // Built-in headers come straight from the registry transport — single source of
     // truth, so the UI pre-fills exactly what this provider sends upstream.
     return NextResponse.json({
@@ -97,11 +103,19 @@ export async function PUT(request, { params }) {
     if (error) {
       return NextResponse.json({ error }, { status: 400 });
     }
-    const current = await readOverrides();
+    let viewerId = null;
+    try {
+      viewerId = (await getRequestUser())?.id || null;
+    } catch {}
+    const current = await readOverrides(viewerId);
     const next = { ...current };
     if (override) next[canonical] = override;
     else delete next[canonical];
-    await updateSettings({ providerOverrides: next });
+    if (viewerId) {
+      await updateUserSettings(viewerId, { providerOverrides: next });
+    } else {
+      await updateSettings({ providerOverrides: next });
+    }
     return NextResponse.json({ headers: override?.headers || {} });
   } catch (error) {
     console.log("Error saving provider overrides:", error);

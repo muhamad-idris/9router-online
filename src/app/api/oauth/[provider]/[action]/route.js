@@ -8,6 +8,7 @@ import {
   pollForToken
 } from "@/lib/oauth/providers";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 import { readDesktopPassToken } from "open-sse/shared/mimoAccount.js";
 import {
   startCodexProxy,
@@ -66,6 +67,7 @@ async function completeXaiManualCode(code, state) {
       expiresAt: tokenData.expiresIn
         ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
         : null,
+      userId: await ownerIdFromSession(),
       testStatus: "active",
     });
     clearXaiSession(state);
@@ -349,6 +351,7 @@ export async function POST(request, { params }) {
           const connection = await createProviderConnection({
             provider: "xiaomi-mimo",
             authType: "oauth",
+            userId: await ownerIdFromSession(),
             accessToken,
             refreshToken: null,
             expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
@@ -398,6 +401,7 @@ export async function POST(request, { params }) {
             expiresAt: tokenData.expiresIn
               ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
               : null,
+            userId: await ownerIdFromSession(),
             testStatus: "active",
           });
           return NextResponse.json({
@@ -439,6 +443,7 @@ export async function POST(request, { params }) {
         const connection = await createProviderConnection({
           provider,
           authType: "access_token",
+          userId: await ownerIdFromSession(),
           accessToken: code,
           email: email || null,
           providerSpecificData,
@@ -478,6 +483,7 @@ export async function POST(request, { params }) {
         expiresAt: tokenData.expiresIn 
           ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString() 
           : null,
+        userId: await ownerIdFromSession(),
         testStatus: "active",
       });
 
@@ -534,6 +540,7 @@ export async function POST(request, { params }) {
           expiresAt: result.tokens.expiresIn 
             ? new Date(Date.now() + result.tokens.expiresIn * 1000).toISOString() 
             : null,
+          userId: await ownerIdFromSession(),
           testStatus: "active",
         });
 

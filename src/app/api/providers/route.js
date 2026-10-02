@@ -9,6 +9,8 @@ import {
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
 import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +30,7 @@ function normalizeProxyConfig(body = {}) {
   };
 }
 
-async function normalizeProxyPoolId(proxyPoolId) {
+async function normalizeProxyPoolId(proxyPoolId, viewer = null) {
   if (proxyPoolId === undefined || proxyPoolId === null || proxyPoolId === "" || proxyPoolId === "__none__") {
     return { proxyPoolId: null };
   }
@@ -39,22 +41,24 @@ async function normalizeProxyPoolId(proxyPoolId) {
   }
 
   const proxyPool = await getProxyPoolById(normalizedId);
-  if (!proxyPool) {
+  // Pools may embed credentials → only the owner's pools may be attached.
+  if (!proxyPool || isForeignRow(proxyPool, viewer)) {
     return { error: "Proxy pool not found" };
   }
 
   return { proxyPoolId: normalizedId };
 }
 
-// GET /api/providers - List all connections
+// GET /api/providers - List all connections (scoped per user in online mode)
 export async function GET() {
   try {
-    const connections = await getProviderConnections();
+    const user = await getRequestUser();
+    const connections = await getProviderConnections(user?.id ? { userId: user.id } : {});
 
     // Build nodeNameMap for compatible providers (id → name)
     let nodeNameMap = {};
     try {
-      const nodes = await getProviderNodes();
+      const nodes = await getProviderNodes(user?.id ? { userId: user.id } : {});
       for (const node of nodes) {
         if (node.id && node.name) nodeNameMap[node.id] = node.name;
       }
@@ -94,7 +98,7 @@ export async function POST(request) {
       return NextResponse.json({ error: proxyConfig.error }, { status: 400 });
     }
 
-    const proxyPoolResult = await normalizeProxyPoolId(body.proxyPoolId);
+    const proxyPoolResult = await normalizeProxyPoolId(body.proxyPoolId, await getRequestUser().catch(() => null));
     if (proxyPoolResult.error) {
       return NextResponse.json({ error: proxyPoolResult.error }, { status: 400 });
     }
@@ -126,10 +130,21 @@ export async function POST(request) {
 
     let providerSpecificData = normalizeProviderSpecificData(provider, body, body.providerSpecificData);
 
+    // Node ownership in online mode: connections may only attach to own nodes.
+    let nodeViewer = null;
+    try {
+      nodeViewer = await getRequestUser();
+    } catch {}
+    const requireOwnedNode = async (nodeId) => {
+      const node = await getProviderNodeById(nodeId);
+      if (!node || isForeignRow(node, nodeViewer)) return null;
+      return node;
+    };
+
     // Compatible LLM nodes support multiple API-key connections (key pool); runtime
     // rotates/fails over via getProviderCredentials. Embedding nodes stay single-connection.
     if (isOpenAICompatibleProvider(provider)) {
-      const node = await getProviderNodeById(provider);
+      const node = await requireOwnedNode(provider);
       if (!node) {
         return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
       }
@@ -140,7 +155,7 @@ export async function POST(request) {
         nodeName: node.name,
       };
     } else if (isAnthropicCompatibleProvider(provider)) {
-      const node = await getProviderNodeById(provider);
+      const node = await requireOwnedNode(provider);
       if (!node) {
         return NextResponse.json({ error: "Anthropic Compatible node not found" }, { status: 404 });
       }
@@ -150,7 +165,7 @@ export async function POST(request) {
         nodeName: node.name,
       };
     } else if (isCustomEmbeddingProvider(provider)) {
-      const node = await getProviderNodeById(provider);
+      const node = await requireOwnedNode(provider);
       if (!node) {
         return NextResponse.json({ error: "Custom Embedding node not found" }, { status: 404 });
       }
@@ -183,6 +198,7 @@ export async function POST(request) {
       providerSpecificData: mergedProviderSpecificData,
       isActive: true,
       testStatus: testStatus || "unknown",
+      userId: (await getRequestUser())?.id || null,
       // POST with an id is an explicit edit of that connection; without one, a
       // name collision is refused rather than silently overwriting a key. #4311
       allowOverwrite: body.id ? true : (body.allowOverwrite === true || body.overwrite === true),

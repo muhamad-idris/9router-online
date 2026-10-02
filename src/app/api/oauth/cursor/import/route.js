@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { CursorService } from "@/lib/oauth/services/cursor";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 
 /**
  * POST /api/oauth/cursor/import
@@ -43,6 +44,7 @@ export async function POST(request) {
     const connection = await createProviderConnection({
       provider: "cursor",
       authType: "oauth",
+      userId: await ownerIdFromSession(),
       accessToken: tokenData.accessToken,
       refreshToken: null, // Cursor doesn't have public refresh endpoint
       expiresAt: new Date(Date.now() + tokenData.expiresIn * 1000).toISOString(),

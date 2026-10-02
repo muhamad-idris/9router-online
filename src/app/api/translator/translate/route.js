@@ -4,6 +4,7 @@ import { translateRequest } from "open-sse/translator/index.js";
 import { FORMATS } from "open-sse/translator/formats.js";
 import { getModelInfo } from "@/sse/services/model.js";
 import { getProviderConnections } from "@/lib/localDb.js";
+import { getRequestUser } from "@/lib/auth/requestUser";
 import { getExecutor } from "open-sse/executors/index.js";
 
 export async function POST(request) {
@@ -57,7 +58,12 @@ export async function POST(request) {
         delete translated._toolNameMap;
 
         // Build URL + headers via executor (same as chatCore → executor.execute)
-        const connections = await getProviderConnections({ provider });
+        // Scope to the viewer's own connection in online mode (legacy: first).
+        let viewerId = null;
+        try {
+          viewerId = (await getRequestUser())?.id || null;
+        } catch {}
+        const connections = await getProviderConnections(viewerId ? { provider, userId: viewerId } : { provider });
         const connection = connections.find(c => c.isActive !== false);
         if (!connection) {
           return NextResponse.json({ success: false, error: `No active connection for provider: ${provider}` }, { status: 400 });

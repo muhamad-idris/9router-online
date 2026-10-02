@@ -10,17 +10,19 @@ function rowToNode(row) {
     id: row.id,
     type: row.type,
     name: row.name,
+    userId: row.userId ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
 function nodeToRow(n) {
-  const { id, type, name, createdAt, updatedAt, ...rest } = n;
+  const { id, type, name, userId, createdAt, updatedAt, ...rest } = n;
   return {
     id,
     type: type ?? null,
     name: name ?? null,
+    userId: userId ?? null,
     data: stringifyJson(rest),
     createdAt,
     updatedAt,
@@ -30,11 +32,11 @@ function nodeToRow(n) {
 function upsert(db, n) {
   const r = nodeToRow(n);
   db.run(
-    `INSERT INTO providerNodes(id, type, name, data, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?)
+    `INSERT INTO providerNodes(id, type, name, userId, data, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
-       type=excluded.type, name=excluded.name, data=excluded.data, updatedAt=excluded.updatedAt`,
-    [r.id, r.type, r.name, r.data, r.createdAt, r.updatedAt]
+       type=excluded.type, name=excluded.name, userId=excluded.userId, data=excluded.data, updatedAt=excluded.updatedAt`,
+    [r.id, r.type, r.name, r.userId, r.data, r.createdAt, r.updatedAt]
   );
 }
 
@@ -43,6 +45,7 @@ export async function getProviderNodes(filter = {}) {
   const where = [];
   const params = [];
   if (filter.type) { where.push("type = ?"); params.push(filter.type); }
+  if (filter.userId) { where.push("userId = ?"); params.push(filter.userId); }
   const sql = `SELECT * FROM providerNodes${where.length ? ` WHERE ${where.join(" AND ")}` : ""}`;
   return db.all(sql, params).map(rowToNode);
 }
@@ -59,6 +62,7 @@ export async function createProviderNode(data) {
     id: data.id || uuidv4(),
     type: data.type,
     name: data.name,
+    userId: data.userId || null,
     prefix: data.prefix,
     apiType: data.apiType,
     baseUrl: data.baseUrl,

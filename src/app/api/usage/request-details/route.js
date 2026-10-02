@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestDetails } from "@/lib/usageDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
 
 /**
  * GET /api/usage/request-details
@@ -45,6 +46,8 @@ export async function GET(request) {
     if (status) filter.status = status;
     if (startDate) filter.startDate = startDate;
     if (endDate) filter.endDate = endDate;
+    const viewer = await getRequestUser();
+    if (viewer?.id) filter.userId = viewer.id;
     
     const result = await getRequestDetails(filter);
 

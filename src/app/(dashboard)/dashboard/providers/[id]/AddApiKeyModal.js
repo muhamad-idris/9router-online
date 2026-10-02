@@ -371,6 +371,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
           onChange={(e) => setFormData({ ...formData, priority: Number.parseInt(e.target.value) || 1 })}
         />
 
+        {(proxyPools || []).length > 0 && (
         <Select
           label="Proxy Pool"
           value={formData.proxyPoolId}
@@ -381,11 +382,6 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
           ]}
           placeholder="None"
         />
-
-        {(proxyPools || []).length === 0 && (
-          <p className="text-xs text-text-muted">
-            No active proxy pools available. Create one in Proxy Pools page first.
-          </p>
         )}
 
         <p className="text-xs text-text-muted">

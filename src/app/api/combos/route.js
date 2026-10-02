@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { getCombos, createCombo, getComboByName } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
 
 export const dynamic = "force-dynamic";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
 
-// GET /api/combos - Get all combos
+// GET /api/combos - Get all combos (scoped per user in online mode)
 export async function GET() {
   try {
-    const combos = await getCombos();
+    const user = await getRequestUser();
+    const combos = await getCombos(user?.id ? { userId: user.id } : {});
     return NextResponse.json({ combos });
   } catch (error) {
     console.log("Error fetching combos:", error);
@@ -32,13 +34,14 @@ export async function POST(request) {
       return NextResponse.json({ error: "Name can only contain letters, numbers, -, _ and ." }, { status: 400 });
     }
 
-    // Check if name already exists
-    const existing = await getComboByName(name);
+    // Check if name already exists (per user in online mode)
+    const user = await getRequestUser();
+    const existing = await getComboByName(name, user?.id || null);
     if (existing) {
       return NextResponse.json({ error: "Combo name already exists" }, { status: 400 });
     }
 
-    const combo = await createCombo({ name, models: models || [], kind: kind || null });
+    const combo = await createCombo({ name, models: models || [], kind: kind || null, userId: user?.id || null });
 
     return NextResponse.json(combo, { status: 201 });
   } catch (error) {

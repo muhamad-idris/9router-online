@@ -123,10 +123,11 @@ async function ensureRingInitialized() {
   recentRing.initialized = true;
   try {
     const db = await getAdapter();
-    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
+    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens, userId FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
     recentRing.items = rows.reverse().map((r) => ({
       timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
       apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
+      userId: r.userId || null,
       tokens: parseJson(r.tokens, {}),
     }));
   } catch {}
@@ -194,11 +195,25 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   scheduleStatsEvent("pending");
 }
 
-export async function getActiveRequests() {
+// opts.userId: scope active/recent/error data to one account (registered
+// dashboard users); admin (no opts) sees everything.
+export async function getActiveRequests(opts = {}) {
+  const scopeUserId = opts.userId || null;
+  let userConnIds = null;
+  if (scopeUserId) {
+    try {
+      const { getProviderConnections } = await import("./connectionsRepo.js");
+      userConnIds = new Set((await getProviderConnections({ userId: scopeUserId })).map((c) => c.id));
+    } catch {
+      userConnIds = new Set();
+    }
+  }
+
   const activeRequests = [];
   const connectionMap = await getConnectionMapCached();
 
   for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
+    if (userConnIds && !userConnIds.has(connectionId)) continue;
     for (const [modelKey, count] of Object.entries(models)) {
       if (count > 0) {
         const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
@@ -215,6 +230,7 @@ export async function getActiveRequests() {
   await ensureRingInitialized();
   const seen = new Set();
   const recentRequests = [...recentRing.items]
+    .filter((e) => !scopeUserId || (e.userId || null) === scopeUserId)
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .map((e) => {
       const t = e.tokens || {};
@@ -235,7 +251,8 @@ export async function getActiveRequests() {
     })
     .slice(0, 20);
 
-  const errorProvider = (Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "";
+  // Global error signal is cross-user; hide it from scoped viewers.
+  const errorProvider = !scopeUserId && (Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "";
   return { activeRequests, recentRequests, errorProvider };
 }
 
@@ -262,12 +279,13 @@ export async function saveRequestUsage(entry) {
            AND COALESCE(model, '') = COALESCE(?, '')
            AND COALESCE(connectionId, '') = COALESCE(?, '')
            AND COALESCE(apiKey, '') = COALESCE(?, '')
+           AND COALESCE(userId, '') = COALESCE(?, '')
            AND promptTokens = ?
            AND completionTokens = ?
          ORDER BY id DESC LIMIT 1`,
         [
           entry.timestamp, entry.provider || null, entry.model || null,
-          entry.connectionId || null, entry.apiKey || null,
+          entry.connectionId || null, entry.apiKey || null, entry.userId || null,
           promptTokens, completionTokens,
         ]
       );
@@ -280,10 +298,10 @@ export async function saveRequestUsage(entry) {
       }
 
       db.run(
-        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, userId, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.timestamp, entry.provider || null, entry.model || null,
-          entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
+          entry.connectionId || null, entry.apiKey || null, entry.userId || null, entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
           stringifyJson(tokens), stringifyJson({}),
         ]
@@ -321,6 +339,7 @@ export async function getUsageHistory(filter = {}) {
 
   if (filter.provider) { conds.push("provider = ?"); params.push(filter.provider); }
   if (filter.model) { conds.push("model = ?"); params.push(filter.model); }
+  if (filter.userId) { conds.push("userId = ?"); params.push(filter.userId); }
   if (filter.startDate) { conds.push("timestamp >= ?"); params.push(new Date(filter.startDate).toISOString()); }
   if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
 
@@ -344,8 +363,14 @@ function loadDaysInRange(adapter, maxDays) {
   return adapter.all(`SELECT dateKey, data FROM usageDaily WHERE dateKey >= ? ORDER BY dateKey ASC`, [cutoffKey]);
 }
 
-export async function getUsageStats(period = "all") {
+export async function getUsageStats(period = "all", opts = {}) {
   const db = await getAdapter();
+
+  // Per-user scope (registered dashboard users). usageDaily is a global
+  // rollup, so scoped viewers read straight from usageHistory instead.
+  const scopeUserId = opts.userId || null;
+  const userCond = scopeUserId ? " AND userId = ?" : "";
+  const userParams = scopeUserId ? [scopeUserId] : [];
 
   const [{ getProviderConnections }, { getApiKeys }, { getProviderNodes }] = await Promise.all([
     import("./connectionsRepo.js"),
@@ -354,9 +379,10 @@ export async function getUsageStats(period = "all") {
   ]);
 
   let allConnections = [];
-  try { allConnections = await getProviderConnections(); } catch {}
+  try { allConnections = await getProviderConnections(scopeUserId ? { userId: scopeUserId } : {}); } catch {}
   const connectionMap = {};
   for (const c of allConnections) connectionMap[c.id] = c.name || c.email || c.id;
+  const userConnIds = new Set(allConnections.map((c) => c.id));
 
   const providerNodeNameMap = {};
   try {
@@ -366,11 +392,15 @@ export async function getUsageStats(period = "all") {
 
   let allApiKeys = [];
   try { allApiKeys = await getApiKeys(); } catch {}
+  if (scopeUserId) allApiKeys = allApiKeys.filter((k) => !k.userId || k.userId === scopeUserId);
   const apiKeyMap = {};
   for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
 
   // recentRequests from live history (last 100 entries enough for 20 deduped)
-  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
+  const recentRows = db.all(
+    `SELECT timestamp, provider, model, tokens, status FROM usageHistory WHERE 1=1${userCond} ORDER BY id DESC LIMIT 100`,
+    userParams
+  );
   const seen = new Set();
   const recentRequests = recentRows
     .map((r) => {
@@ -393,19 +423,30 @@ export async function getUsageStats(period = "all") {
     })
     .slice(0, 20);
 
+  // Pending/live state is process-global: scope it to the viewer's own
+  // connections (registered users) so other users' in-flight work stays hidden.
+  let scopedPending = pendingRequests;
+  if (scopeUserId) {
+    const byAccount = {};
+    for (const [cid, models] of Object.entries(pendingRequests.byAccount)) {
+      if (userConnIds.has(cid)) byAccount[cid] = models;
+    }
+    scopedPending = { byModel: {}, byAccount };
+  }
+
   const stats = {
     totalRequests: 0,
     totalPromptTokens: 0, totalCompletionTokens: 0, totalCachedTokens: 0, totalCost: 0,
     byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {},
     last10Minutes: [],
-    pending: pendingRequests,
+    pending: scopedPending,
     activeRequests: [],
     recentRequests,
-    errorProvider: (Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "",
+    errorProvider: (!scopeUserId && Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "",
   };
 
   // Active requests
-  for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
+  for (const [connectionId, models] of Object.entries(scopedPending.byAccount)) {
     for (const [modelKey, count] of Object.entries(models)) {
       if (count > 0) {
         const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
@@ -430,8 +471,8 @@ export async function getUsageStats(period = "all") {
     stats.last10Minutes.push(bucketMap[ts]);
   }
   const recent10 = db.all(
-    `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ? AND timestamp <= ?`,
-    [tenMinutesAgo.toISOString(), now.toISOString()]
+    `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ? AND timestamp <= ?${userCond}`,
+    [tenMinutesAgo.toISOString(), now.toISOString(), ...userParams]
   );
   for (const r of recent10) {
     const tt = new Date(r.timestamp).getTime();
@@ -444,7 +485,9 @@ export async function getUsageStats(period = "all") {
     }
   }
 
-  const useDailySummary = period !== "24h" && period !== "today";
+  // usageDaily is a global rollup with no userId dimension — scoped viewers
+  // always read live history instead (cutoff applied below).
+  const useDailySummary = !scopeUserId && period !== "24h" && period !== "today";
 
   if (useDailySummary) {
     const periodDays = { "7d": 7, "30d": 30, "60d": 60 };
@@ -572,18 +615,21 @@ export async function getUsageStats(period = "all") {
       if (stats.byEndpoint[endpointKey] && new Date(ts) > new Date(stats.byEndpoint[endpointKey].lastUsed)) stats.byEndpoint[endpointKey].lastUsed = ts;
     }
   } else {
-    // 24h / today: live history
+    // 24h / today (admin) or any period for scoped viewers (usageDaily is
+    // global, so7d/30d/60d/all are honored with a history cutoff instead).
     let cutoff;
     if (period === "today") {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
       cutoff = startOfDay.toISOString();
-    } else {
-      cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
+    } else if (period === "24h" || PERIOD_MS[period]) {
+      cutoff = new Date(Date.now() - (PERIOD_MS[period] || PERIOD_MS["24h"])).toISOString();
     }
+    const histWhere = `WHERE 1=1${cutoff ? " AND timestamp >= ?" : ""}${userCond}`;
+    const histParams = [...(cutoff ? [cutoff] : []), ...userParams];
     const filtered = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
-      [cutoff]
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory ${histWhere}`,
+      histParams
     );
 
     for (const r of filtered) {
@@ -668,9 +714,10 @@ export async function getUsageStats(period = "all") {
   return stats;
 }
 
-export async function getChartData(period = "7d") {
+export async function getChartData(period = "7d", opts = {}) {
   const db = await getAdapter();
   const now = Date.now();
+  const scopeUserId = opts.userId || null;
 
   if (period === "today") {
     const bucketCount = 24;
@@ -683,8 +730,8 @@ export async function getChartData(period = "7d") {
     const buckets = Array.from({ length: bucketCount }, (_, i) => ({ label: labelFn(startTime + i * bucketMs), tokens: 0, cost: 0, requests: 0 }));
 
     const rows = db.all(
-      `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ?`,
-      [new Date(startTime).toISOString()]
+      `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ?${scopeUserId ? " AND userId = ?" : ""}`,
+      scopeUserId ? [new Date(startTime).toISOString(), scopeUserId] : [new Date(startTime).toISOString()]
     );
     for (const r of rows) {
       const t = new Date(r.timestamp).getTime();
@@ -707,8 +754,8 @@ export async function getChartData(period = "7d") {
     const buckets = Array.from({ length: bucketCount }, (_, i) => ({ label: labelFn(startTime + i * bucketMs), tokens: 0, cost: 0, requests: 0 }));
 
     const rows = db.all(
-      `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ?`,
-      [new Date(startTime).toISOString()]
+      `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ?${scopeUserId ? " AND userId = ?" : ""}`,
+      scopeUserId ? [new Date(startTime).toISOString(), scopeUserId] : [new Date(startTime).toISOString()]
     );
     for (const r of rows) {
       const t = new Date(r.timestamp).getTime();
@@ -722,6 +769,57 @@ export async function getChartData(period = "7d") {
   }
 
   const labelFn = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  // Scoped viewers: usageDaily has no userId dimension — bucket straight
+  // from usageHistory by local date.
+  if (scopeUserId) {
+    const bucketCount = period === "all" ? null : period === "7d" ? 7 : period === "30d" ? 30 : 60;
+    let startIso = null;
+    if (bucketCount) {
+      const startDay = new Date();
+      startDay.setHours(0, 0, 0, 0);
+      startDay.setDate(startDay.getDate() - (bucketCount - 1));
+      startIso = startDay.toISOString();
+    }
+    const params = [scopeUserId];
+    let sql = `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE userId = ?`;
+    if (startIso) { sql += " AND timestamp >= ?"; params.push(startIso); }
+    const rows = db.all(sql, params);
+
+    const dayMap = {};
+    for (const r of rows) {
+      const key = getLocalDateKey(r.timestamp);
+      const b = dayMap[key] ||= { tokens: 0, cost: 0, requests: 0 };
+      b.tokens += (r.promptTokens || 0) + (r.completionTokens || 0);
+      b.cost += r.cost || 0;
+      b.requests += 1;
+    }
+
+    const today0 = new Date();
+    today0.setHours(0, 0, 0, 0);
+    let start;
+    if (bucketCount) {
+      start = new Date(today0);
+      start.setDate(start.getDate() - (bucketCount - 1));
+    } else {
+      const keys = Object.keys(dayMap).sort();
+      if (!keys.length) return [];
+      start = new Date(keys[0] + "T00:00:00");
+    }
+    const count = Math.max(1, Math.round((today0 - start) / 86400000) + 1);
+    return Array.from({ length: count }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const b = dayMap[key];
+      return {
+        label: labelFn(d),
+        tokens: b ? b.tokens : 0,
+        cost: b ? b.cost : 0,
+        requests: b ? b.requests : 0,
+      };
+    });
+  }
 
   if (period === "all") {
     const dayRows = loadDaysInRange(db, null);
@@ -778,12 +876,13 @@ function formatLogDate(date = new Date()) {
 // No-op: request log is now derived from usageHistory table on read.
 export async function appendRequestLog() {}
 
-export async function getRecentLogs(limit = 200) {
+export async function getRecentLogs(limit = 200, opts = {}) {
   try {
     const db = await getAdapter();
+    const scopeUserId = opts.userId || null;
     const rows = db.all(
-      `SELECT timestamp, provider, model, connectionId, promptTokens, completionTokens, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`,
-      [limit],
+      `SELECT timestamp, provider, model, connectionId, promptTokens, completionTokens, status, tokens FROM usageHistory${scopeUserId ? " WHERE userId = ?" : ""} ORDER BY id DESC LIMIT ?`,
+      scopeUserId ? [scopeUserId, limit] : [limit],
     );
     if (!rows.length) return [];
 

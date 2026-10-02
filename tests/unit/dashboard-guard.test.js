@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   validateApiKey: vi.fn(),
   getConsistentMachineId: vi.fn(),
   verifyDashboardAuthToken: vi.fn(),
+  getDashboardAuthSession: vi.fn(),
+  isSessionAllowed: vi.fn(),
+  getSessionUser: vi.fn(),
 }));
 
 vi.mock("next/server", () => ({
@@ -31,18 +34,21 @@ vi.mock("@/shared/utils/machineId", () => ({
 
 vi.mock("@/lib/auth/dashboardSession", () => ({
   verifyDashboardAuthToken: mocks.verifyDashboardAuthToken,
+  getDashboardAuthSession: mocks.getDashboardAuthSession,
+  isSessionAllowed: mocks.isSessionAllowed,
+  getSessionUser: mocks.getSessionUser,
 }));
 
 const { proxy, __test__ } = await import("../../src/dashboardGuard.js");
 
 const PEER_TOKEN = "peer-token-fixture";
 
-function request(pathname, headers = {}) {
+function request(pathname, headers = {}, cookieToken = undefined) {
   const normalizedHeaders = new Headers(headers);
   return {
     nextUrl: { pathname, searchParams: new URL(`http://localhost${pathname}`).searchParams },
     headers: normalizedHeaders,
-    cookies: { get: vi.fn(() => undefined) },
+    cookies: { get: vi.fn((name) => (name === "auth_token" && cookieToken ? { value: cookieToken } : undefined)) },
     url: `http://localhost${pathname}`,
   };
 }
@@ -304,5 +310,74 @@ describe("dashboard guard helpers", () => {
     });
 
     expect(__test__.extractApiKey(apiRequest)).toBe("header-key");
+  });
+});
+
+describe("dashboard guard admin-only routes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
+    mocks.getSettings.mockResolvedValue({ requireLogin: true });
+    mocks.validateApiKey.mockResolvedValue(false);
+    mocks.getConsistentMachineId.mockResolvedValue("cli-token");
+    mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+    mocks.isSessionAllowed.mockReturnValue(true);
+  });
+
+  it("rejects registered user from /api/proxy-pools with 403", async () => {
+    mocks.getDashboardAuthSession.mockResolvedValue({ userId: "u1" });
+    mocks.getSessionUser.mockReturnValue({ id: "u1" });
+
+    const response = await proxy(request("/api/proxy-pools", {}, "valid-token"));
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe("Admin only");
+  });
+
+  it("rejects registered user from /api/translator/console-logs/stream with 403", async () => {
+    mocks.getDashboardAuthSession.mockResolvedValue({ userId: "u1" });
+    mocks.getSessionUser.mockReturnValue({ id: "u1" });
+
+    const response = await proxy(request("/api/translator/console-logs/stream", {}, "valid-token"));
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe("Admin only");
+  });
+
+  it("allows legacy admin session on admin-only route", async () => {
+    mocks.getDashboardAuthSession.mockResolvedValue({ legacy: true });
+    mocks.getSessionUser.mockReturnValue({ id: null });
+
+    const response = await proxy(request("/api/proxy-pools", {}, "valid-token"));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("allows registered user on admin-only route when requireLogin=false (local mode)", async () => {
+    mocks.getSettings.mockResolvedValue({ requireLogin: false });
+    mocks.getDashboardAuthSession.mockResolvedValue({ userId: "u1" });
+    mocks.getSessionUser.mockReturnValue({ id: "u1" });
+
+    const response = await proxy(request("/api/proxy-pools", {}, "valid-token"));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("does not block registered user from standard translator route (/api/translator/translate)", async () => {
+    mocks.getDashboardAuthSession.mockResolvedValue({ userId: "u1" });
+    mocks.getSessionUser.mockReturnValue({ id: "u1" });
+
+    const response = await proxy(request("/api/translator/translate", {}, "valid-token"));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("returns 401 for unauthenticated request to admin-only route", async () => {
+    mocks.verifyDashboardAuthToken.mockResolvedValue(false);
+
+    const response = await proxy(request("/api/proxy-pools"));
+
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe("Unauthorized");
   });
 });

@@ -19,6 +19,7 @@ const authMocks = vi.hoisted(() => ({
   clearAccountError: vi.fn(async () => {}),
   extractApiKey: vi.fn(() => null),
   isValidApiKey: vi.fn(async () => true),
+  resolveRequestIdentity: vi.fn(async () => ({ userId: null, keyId: null, apiKey: null })),
 }));
 const tokenMocks = vi.hoisted(() => ({
   checkAndRefreshToken: vi.fn(async (_p, creds) => creds),
@@ -29,6 +30,7 @@ vi.mock("@/sse/services/auth.js", () => authMocks);
 vi.mock("@/sse/services/tokenRefresh.js", () => tokenMocks);
 vi.mock("@/lib/localDb", () => ({
   getSettings: vi.fn(async () => ({ requireApiKey: false })),
+  getEffectiveSettings: vi.fn(async () => ({ requireApiKey: false })),
   getProviderConnectionById: vi.fn(async () => ({ id: "conn-5", provider: "xai" })),
   getComboByName: vi.fn(async () => null),
   getModelAliases: vi.fn(async () => ({})),

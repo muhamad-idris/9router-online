@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { KiroService } from "@/lib/oauth/services/kiro";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 
 /**
  * POST /api/oauth/kiro/social-exchange
@@ -40,6 +41,7 @@ export async function POST(request) {
     const connection = await createProviderConnection({
       provider: "kiro",
       authType: "oauth",
+      userId: await ownerIdFromSession(),
       accessToken: tokenData.accessToken,
       refreshToken: tokenData.refreshToken,
       expiresAt: new Date(Date.now() + tokenData.expiresIn * 1000).toISOString(),

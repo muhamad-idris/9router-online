@@ -2,6 +2,8 @@
 import "open-sse/index.js";
 
 import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
+import { isForeignRow } from "@/lib/auth/connectionOwner";
 import { getUsageForProvider } from "open-sse/services/usage.js";
 import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
 import { getExecutor } from "open-sse/executors/index.js";
@@ -142,6 +144,13 @@ export async function GET(request, { params }) {
     if (!connection) {
       return Response.json({ error: "Connection not found" }, { status: 404 });
     }
+
+    // Ownership check: quota reads may refresh the owner's live tokens.
+    try {
+      if (isForeignRow(connection, await getRequestUser())) {
+        return Response.json({ error: "Connection not found" }, { status: 404 });
+      }
+    } catch {}
 
     // Allow OAuth connections, plus whitelisted apikey providers (glm/minimax/kiro/...)
     // Kiro's headless api-key flow persists authType "api_key" (underscore) while

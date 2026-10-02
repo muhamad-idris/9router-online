@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 import {
   fetchZedAuthenticatedUser,
   resolveZedOrganizationId,
@@ -50,6 +51,7 @@ export async function POST(request) {
     const connection = await createProviderConnection({
       provider: "zed",
       authType: "oauth",
+      userId: await ownerIdFromSession(),
       accessToken,
       refreshToken: null,
       expiresAt: null,

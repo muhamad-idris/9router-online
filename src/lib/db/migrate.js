@@ -133,10 +133,10 @@ function importLegacyMain(adapter, data) {
   }, (n) => ({ id: n.id ?? null, type: n.type ?? null, name: n.name ?? null }));
 
   importWithAssertion(adapter, "proxyPools", data.proxyPools || [], (p) => {
-    const { id, isActive, testStatus, createdAt, updatedAt, ...rest } = p;
+    const { id, isActive, testStatus, userId, createdAt, updatedAt, ...rest } = p;
     adapter.run(
-      `INSERT OR REPLACE INTO proxyPools(id, isActive, testStatus, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
-      [id, isActive === false ? 0 : 1, testStatus || "unknown", stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
+      `INSERT OR REPLACE INTO proxyPools(id, isActive, testStatus, userId, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+      [id, isActive === false ? 0 : 1, testStatus || "unknown", userId || null, stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
     );
   }, (p) => ({ id: p.id ?? null }));
 

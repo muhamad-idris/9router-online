@@ -4,12 +4,14 @@ import {
   clearAccountError,
   extractApiKey,
   isValidApiKey,
+  resolveRequestIdentity,
 } from "../services/auth.js";
-import { getSettings, getCombos } from "@/lib/localDb";
+import { getSettings, getEffectiveSettings, getCombos } from "@/lib/localDb";
 import { AI_PROVIDERS, resolveProviderId } from "@/shared/constants/providers.js";
 import { handleSearchCore } from "open-sse/handlers/search/index.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { recordEndpointUsage } from "../services/usage.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
@@ -38,24 +40,24 @@ export async function handleSearch(request) {
 
   // Log API key (masked)
   const apiKey = extractApiKey(request);
+  const { userId: requestUserId } = await resolveRequestIdentity(request);
   if (apiKey) {
     log.debug("AUTH", `API Key: ${log.maskKey(apiKey)}`);
   } else {
     log.debug("AUTH", "No API key provided (local mode)");
   }
 
-  // Enforce API key if enabled in settings
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) {
-      log.warn("AUTH", "Missing API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
-      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-    }
+  // Enforce API keys: a presented key must map to an active account (unknown,
+  // revoked, or owner-blocked keys are rejected even when key enforcement is
+  // off — otherwise they'd fall back to the shared legacy pool).
+  const settings = await getEffectiveSettings(requestUserId);
+  if (apiKey && !(await isValidApiKey(apiKey))) {
+    log.warn("AUTH", "Invalid API key");
+    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+  }
+  if (settings.requireApiKey && !apiKey) {
+    log.warn("AUTH", "Missing API key (requireApiKey=true)");
+    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
   }
 
   if (!providerInput || typeof providerInput !== "string") {
@@ -69,7 +71,7 @@ export async function handleSearch(request) {
   }
 
   // Combo expansion: providerInput may be a combo name → run fallback/round-robin across providers
-  const combos = await getCombos();
+  const combos = await getCombos(requestUserId ? { userId: requestUserId } : {});
   const comboModels = getComboModelsFromData(providerInput, combos);
   if (comboModels) {
     const comboStrategies = settings.comboStrategies || {};
@@ -79,18 +81,19 @@ export async function handleSearch(request) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleProviderSearch(b, m, request, apiKey, settings),
+      handleSingleModel: (b, m) => handleSingleProviderSearch(b, m, request, apiKey, settings, requestUserId),
       log,
       comboName: providerInput,
       comboStrategy,
-      comboStickyLimit
+      comboStickyLimit,
+      userId: requestUserId
     });
   }
 
-  return handleSingleProviderSearch(body, providerInput, request, apiKey, settings);
+  return handleSingleProviderSearch(body, providerInput, request, apiKey, settings, requestUserId);
 }
 
-async function handleSingleProviderSearch(body, providerInput, request, apiKey, settings) {
+async function handleSingleProviderSearch(body, providerInput, request, apiKey, settings, requestUserId = null) {
   const query = body.query;
   const providerId = resolveProviderId(providerInput);
   const resolvedProvider = AI_PROVIDERS[providerId];
@@ -139,6 +142,9 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
       credentials: null,
       log
     });
+    if (result.success) {
+      recordEndpointUsage({ provider: providerId, model: "web-search", userId: requestUserId, apiKey, endpoint: "/v1/search" });
+    }
     if (result.success) return result.response;
     return result.response;
   }
@@ -164,12 +170,12 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
     // Provider that actually owns the connection in use — differs from
     // providerId once we fall back, and error locks must be attributed to it.
     let credentialProviderId = providerId;
-    let credentials = await getProviderCredentials(providerId, excludeConnectionIds, searchLockKey);
+    let credentials = await getProviderCredentials(providerId, excludeConnectionIds, searchLockKey, { userId: requestUserId });
 
     // Fall back to the related chat provider's credentials when this search
     // provider has none of its own (one key, chat + search).
     if (!credentials && fallbackProviderId) {
-      credentials = await getProviderCredentials(fallbackProviderId, excludeConnectionIds, searchLockKey);
+      credentials = await getProviderCredentials(fallbackProviderId, excludeConnectionIds, searchLockKey, { userId: requestUserId });
       if (credentials) {
         credentialProviderId = fallbackProviderId;
         log.info("AUTH", `\x1b[32m${providerId} reusing ${fallbackProviderId} credentials\x1b[0m`);
@@ -214,7 +220,10 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
       }
     });
 
-    if (result.success) return result.response;
+    if (result.success) {
+      recordEndpointUsage({ provider: providerId, model: "web-search", connectionId: credentials.connectionId, userId: requestUserId, apiKey, endpoint: "/v1/search" });
+      return result.response;
+    }
 
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, credentialProviderId, searchLockKey);
 

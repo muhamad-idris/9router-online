@@ -6,7 +6,7 @@ import {
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
 } from "@/shared/constants/providers";
-import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
+import { getProviderConnections, getCombos, getCustomModels, getModelAliases, resolveGatewayIdentity } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
@@ -321,9 +321,10 @@ export async function buildModelsList(kindFilter, options = {}) {
   // 9router instance's fetchCompatibleModelIds — skip dynamic fetch to break
   // cross-instance recursive loops.
   const skipDynamicFetch = options.skipDynamicFetch === true;
+  const ownerId = options.userId || null;
   let connections = [];
   try {
-    connections = await getProviderConnections();
+    connections = await getProviderConnections(ownerId ? { userId: ownerId } : {});
     connections = connections.filter(c => c.isActive !== false);
   } catch (e) {
     console.log("Could not fetch providers, returning all models");
@@ -331,7 +332,7 @@ export async function buildModelsList(kindFilter, options = {}) {
 
   let combos = [];
   try {
-    combos = await getCombos();
+    combos = await getCombos(ownerId ? { userId: ownerId } : {});
   } catch (e) {
     console.log("Could not fetch combos");
   }
@@ -651,7 +652,14 @@ export async function GET(request) {
   try {
     // Detect cross-instance recursive /models fetch (another 9router fetching our /models)
     const skipDynamicFetch = request?.headers?.get(INTERNAL_MODELS_FETCH_HEADER) === "1";
-    const data = await buildModelsList([LLM_KIND], { skipDynamicFetch });
+    // Scope the catalog to the gateway-key owner in online mode (legacy: full list).
+    let userId = null;
+    try {
+      const auth = request?.headers?.get("authorization");
+      const raw = auth?.startsWith("Bearer ") ? auth.slice(7) : request?.headers?.get("x-api-key");
+      if (raw) userId = (await resolveGatewayIdentity(raw))?.userId || null;
+    } catch {}
+    const data = await buildModelsList([LLM_KIND], { skipDynamicFetch, userId });
     return Response.json({ object: "list", data }, {
       headers: { "Access-Control-Allow-Origin": "*" },
     });

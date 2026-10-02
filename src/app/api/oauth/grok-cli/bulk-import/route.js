@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 import { decodeXaiIdTokenEmail, extractEmailFromAccessToken } from "@/lib/oauth/providerHelpers";
 
 /**
@@ -90,6 +91,7 @@ export async function POST(request) {
       const created = await createProviderConnection({
         provider: "grok-cli",
         authType: "oauth",
+        userId: await ownerIdFromSession(),
         accessToken,
         refreshToken,
         expiresAt,

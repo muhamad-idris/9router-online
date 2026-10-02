@@ -30,6 +30,7 @@ function normalizeFormData(data = {}) {
 export default function ProxyPoolsPage() {
   const [proxyPools, setProxyPools] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [forbidden, setForbidden] = useState(false);
   const [showFormModal, setShowFormModal] = useState(false);
   const [showBatchImportModal, setShowBatchImportModal] = useState(false);
   const [showVercelModal, setShowVercelModal] = useState(false);
@@ -68,6 +69,13 @@ export default function ProxyPoolsPage() {
 
   const fetchProxyPools = useCallback(async () => {
     try {
+      const statusRes = await fetch("/api/auth/status", { cache: "no-store" });
+      const status = await statusRes.json().catch(() => ({}));
+      if (status?.user?.id) {
+        setForbidden(true);
+        setLoading(false);
+        return;
+      }
       const res = await fetch("/api/proxy-pools?includeUsage=true", { cache: "no-store" });
       const data = await res.json();
       if (res.ok) {
@@ -81,6 +89,7 @@ export default function ProxyPoolsPage() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchProxyPools();
   }, [fetchProxyPools]);
 
@@ -562,6 +571,15 @@ export default function ProxyPoolsPage() {
     () => proxyPools.filter((pool) => pool.isActive === true).length,
     [proxyPools]
   );
+
+  if (forbidden) {
+    return (
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-1 sm:gap-6 sm:px-0">
+        <div><h1 className="text-xl font-semibold sm:text-2xl">Proxy Pools</h1></div>
+        <Card><p className="text-sm text-text-muted">Admin only — proxy pool management is restricted to the instance admin.</p></Card>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

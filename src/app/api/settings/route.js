@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getSettings, updateSettings } from "@/lib/localDb";
+import { getSettings, updateSettings, pickUserSettings, updateUserSettings, getEffectiveSettings, USER_SETTINGS_ALLOWLIST } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import bcrypt from "bcryptjs";
@@ -16,7 +17,13 @@ const PROTECTED_SETTING_KEYS = ["password", "mitmSudoEncrypted"];
 
 export async function GET() {
   try {
-    const settings = await getSettings();
+    // Bridge mode: registered users see their effective (global + own)
+    // settings so the dashboard reflects what actually routes for them.
+    let viewerId = null;
+    try {
+      viewerId = (await getRequestUser())?.id || null;
+    } catch {}
+    const settings = viewerId ? await getEffectiveSettings(viewerId) : await getSettings();
     const { password, oidcClientSecret, ...safeSettings } = settings;
     safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);
     
@@ -37,6 +44,42 @@ export async function GET() {
 
 export async function PATCH(request) {
   try {
+    // Bridge mode: registered users may only change their own allowlisted
+    // preferences (stored per-user); global/infra keys stay admin-only.
+    let viewer = null;
+    try {
+      viewer = await getRequestUser();
+    } catch {}
+    if (viewer?.id) {
+      const body = await request.json().catch(() => ({}));
+      // Users manage their own login password via /api/auth/change-password.
+      if (body.newPassword || body.password || body.currentPassword) {
+        return NextResponse.json(
+          { error: "Use account password change instead" },
+          { status: 400, headers: SETTINGS_RESPONSE_HEADERS }
+        );
+      }
+      const userPatch = pickUserSettings(body);
+      const foreignKeys = Object.keys(body).filter((k) => !USER_SETTINGS_ALLOWLIST.has(k));
+      if (foreignKeys.length > 0) {
+        return NextResponse.json(
+          { error: `Only the instance admin can change: ${foreignKeys.join(", ")}` },
+          { status: 403, headers: SETTINGS_RESPONSE_HEADERS }
+        );
+      }
+      if (Object.keys(userPatch).length === 0) {
+        return NextResponse.json({ error: "No user settings to update" }, { status: 400, headers: SETTINGS_RESPONSE_HEADERS });
+      }
+      const saved = await updateUserSettings(viewer.id, userPatch);
+      if (
+        Object.prototype.hasOwnProperty.call(userPatch, "comboStrategy") ||
+        Object.prototype.hasOwnProperty.call(userPatch, "comboStickyRoundRobinLimit") ||
+        Object.prototype.hasOwnProperty.call(userPatch, "comboStrategies")
+      ) {
+        resetComboRotation(undefined, viewer.id);
+      }
+      return NextResponse.json({ success: true, updated: Object.keys(userPatch), settings: saved }, { headers: SETTINGS_RESPONSE_HEADERS });
+    }
     const body = await request.json();
 
     // Strip protected secrets before any internal handling sets them

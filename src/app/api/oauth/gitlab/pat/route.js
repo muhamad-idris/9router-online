@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 
 const GITLAB_DEFAULT_BASE = "https://gitlab.com";
 
@@ -39,6 +40,7 @@ export async function POST(request) {
     await createProviderConnection({
       provider: "gitlab",
       authType: "oauth",
+      userId: await ownerIdFromSession(),
       accessToken: token.trim(),
       refreshToken: null,
       expiresAt: null,

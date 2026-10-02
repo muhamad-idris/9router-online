@@ -30,6 +30,12 @@ export default function ProfilePage() {
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" });
   const [passStatus, setPassStatus] = useState({ type: "", message: "" });
   const [passLoading, setPassLoading] = useState(false);
+  // Bridge mode: registered (email) users change their own account password
+  // via /api/auth/change-password — the legacy form below is admin-only.
+  const [accountUser, setAccountUser] = useState(null);
+  const [accountPasswords, setAccountPasswords] = useState({ current: "", new: "", confirm: "" });
+  const [accountPassStatus, setAccountPassStatus] = useState({ type: "", message: "" });
+  const [accountPassLoading, setAccountPassLoading] = useState(false);
   const [dbLoading, setDbLoading] = useState(false);
   const [dbStatus, setDbStatus] = useState({ type: "", message: "" });
   const [dbAuth, setDbAuth] = useState({ open: false, mode: "", password: "" });
@@ -85,6 +91,15 @@ export default function ProfilePage() {
   useEffect(() => {
     if (typeof window !== "undefined")
       setIsRemoteHost(!["localhost", "127.0.0.1", "::1"].includes(window.location.hostname));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/auth/status")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.user) setAccountUser(data.user);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -259,6 +274,45 @@ export default function ProfilePage() {
       setPassStatus({ type: "error", message: "An error occurred" });
     } finally {
       setPassLoading(false);
+    }
+  };
+
+  const handleAccountPasswordChange = async (e) => {
+    e.preventDefault();
+    if (accountPasswords.new !== accountPasswords.confirm) {
+      setAccountPassStatus({ type: "error", message: "Passwords do not match" });
+      return;
+    }
+    if (accountPasswords.new.length < 6) {
+      setAccountPassStatus({ type: "error", message: "Password must be at least 6 characters" });
+      return;
+    }
+
+    setAccountPassLoading(true);
+    setAccountPassStatus({ type: "", message: "" });
+
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPassword: accountPasswords.current,
+          newPassword: accountPasswords.new,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setAccountPassStatus({ type: "success", message: "Password updated successfully" });
+        setAccountPasswords({ current: "", new: "", confirm: "" });
+      } else {
+        setAccountPassStatus({ type: "error", message: data.error || "Failed to update password" });
+      }
+    } catch (err) {
+      setAccountPassStatus({ type: "error", message: "An error occurred" });
+    } finally {
+      setAccountPassLoading(false);
     }
   };
 
@@ -799,6 +853,8 @@ export default function ProfilePage() {
               ))}
             </div>
           </div>
+          {/* Database backup: full-DB secrets — instance admin only */}
+          {!accountUser && (
           <div className="flex flex-col gap-3 pt-4 border-t border-border">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 rounded-lg bg-bg border border-border gap-2">
               <div>
@@ -839,6 +895,7 @@ export default function ProfilePage() {
               </p>
             )}
           </div>
+          )}
         </Card>
 
         {/* Language */}
@@ -868,6 +925,8 @@ export default function ProfilePage() {
             <h3 className="text-base sm:text-lg font-semibold">Security</h3>
           </div>
           <div className="flex flex-col gap-4">
+            {/* Require login is global infra — admin only */}
+            {!accountUser && (
             <div className="flex items-start sm:items-center justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm sm:text-base">Require login</p>
@@ -881,7 +940,59 @@ export default function ProfilePage() {
                 disabled={loading}
               />
             </div>
-            {settings.requireLogin === true && (
+            )}
+            {accountUser ? (
+              <form onSubmit={handleAccountPasswordChange} className="flex flex-col gap-4 pt-4 border-t border-border/50">
+                <p className="text-xs sm:text-sm text-text-muted">
+                  Signed in as <span className="font-medium text-text">{accountUser.email}</span>. Change your account password below.
+                </p>
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs sm:text-sm font-medium">Current Password</label>
+                  <Input
+                    type="password"
+                    placeholder="Enter current password"
+                    value={accountPasswords.current}
+                    onChange={(e) => setAccountPasswords({ ...accountPasswords, current: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs sm:text-sm font-medium">New Password</label>
+                    <Input
+                      type="password"
+                      placeholder="Min. 6 characters"
+                      value={accountPasswords.new}
+                      onChange={(e) => setAccountPasswords({ ...accountPasswords, new: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs sm:text-sm font-medium">Confirm New Password</label>
+                    <Input
+                      type="password"
+                      placeholder="Confirm new password"
+                      value={accountPasswords.confirm}
+                      onChange={(e) => setAccountPasswords({ ...accountPasswords, confirm: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {accountPassStatus.message && (
+                  <p className={`text-xs sm:text-sm ${accountPassStatus.type === "error" ? "text-red-500" : "text-green-500"}`}>
+                    {accountPassStatus.message}
+                  </p>
+                )}
+
+                <div className="pt-2">
+                  <Button type="submit" variant="primary" loading={accountPassLoading} className="w-full sm:w-auto">
+                    Update Password
+                  </Button>
+                </div>
+              </form>
+            ) : (
+            settings.requireLogin === true && (
               <form onSubmit={handlePasswordChange} className="flex flex-col gap-4 pt-4 border-t border-border/50">
                 {settings.hasPassword && (
                   <div className="flex flex-col gap-2">
@@ -937,11 +1048,13 @@ export default function ProfilePage() {
                   </Button>
                 </div>
               </form>
+            )
             )}
           </div>
         </Card>
 
-        {/* Single Sign-On (SSO) */}
+        {/* Single Sign-On (SSO) — disabled bridge-wide; config UI is admin-only */}
+        {!accountUser && (
         <Card>
           <button
             type="button"
@@ -1434,6 +1547,7 @@ export default function ProfilePage() {
             </div>
           )}
         </Card>
+        )}
 
         {/* Routing Preferences */}
         <Card>
@@ -1623,6 +1737,7 @@ export default function ProfilePage() {
 
         {/* Account actions */}
         <div className="flex flex-col sm:flex-row gap-2">
+          {!accountUser && (
           <Button
             variant="outline"
             fullWidth
@@ -1632,6 +1747,7 @@ export default function ProfilePage() {
           >
             Shutdown
           </Button>
+          )}
           <Button
             variant="outline"
             fullWidth

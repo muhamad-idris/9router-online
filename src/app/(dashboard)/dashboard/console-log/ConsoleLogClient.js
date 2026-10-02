@@ -22,51 +22,70 @@ function colorLine(line) {
 export default function ConsoleLogClient() {
   const [logs, setLogs] = useState([]);
   const [connected, setConnected] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
   const logRef = useRef(null);
 
   const handleClear = async () => {
     try {
       await fetch("/api/translator/console-logs", { method: "DELETE" });
-      // UI cleared via SSE "clear" event
     } catch (err) {
       console.error("Failed to clear console logs:", err);
     }
   };
 
   useEffect(() => {
-    const es = new EventSource("/api/translator/console-logs/stream");
+    let es;
+    fetch("/api/auth/status", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((status) => {
+        if (status?.user?.id) {
+          setForbidden(true);
+          return;
+        }
+        es = new EventSource("/api/translator/console-logs/stream");
 
-    es.onopen = () => setConnected(true);
+        es.onopen = () => setConnected(true);
 
-    es.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === "init") {
-        setLogs(msg.logs.slice(-CONSOLE_LOG_CONFIG.maxLines));
-      } else if (msg.type === "line") {
-        setLogs((prev) => {
-          const next = [...prev, msg.line];
-          return next.length > CONSOLE_LOG_CONFIG.maxLines ? next.slice(-CONSOLE_LOG_CONFIG.maxLines) : next;
-        });
-      } else if (msg.type === "lines") {
-        setLogs((prev) => {
-          const next = [...prev, ...msg.lines];
-          return next.length > CONSOLE_LOG_CONFIG.maxLines ? next.slice(-CONSOLE_LOG_CONFIG.maxLines) : next;
-        });
-      } else if (msg.type === "clear") {
-        setLogs([]);
-      }
-    };
+        es.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "init") {
+            setLogs(msg.logs.slice(-CONSOLE_LOG_CONFIG.maxLines));
+          } else if (msg.type === "line") {
+            setLogs((prev) => {
+              const next = [...prev, msg.line];
+              return next.length > CONSOLE_LOG_CONFIG.maxLines ? next.slice(-CONSOLE_LOG_CONFIG.maxLines) : next;
+            });
+          } else if (msg.type === "lines") {
+            setLogs((prev) => {
+              const next = [...prev, ...msg.lines];
+              return next.length > CONSOLE_LOG_CONFIG.maxLines ? next.slice(-CONSOLE_LOG_CONFIG.maxLines) : next;
+            });
+          } else if (msg.type === "clear") {
+            setLogs([]);
+          }
+        };
 
-    es.onerror = () => setConnected(false);
+        es.onerror = () => setConnected(false);
+      })
+      .catch(() => {});
 
-    return () => es.close();
+    return () => { if (es) es.close(); };
   }, []);
 
-  // Auto-scroll to bottom on new logs
   useEffect(() => {
     if (!logRef.current) return;
     logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
+
+  if (forbidden) {
+    return (
+      <div className="">
+        <Card>
+          <p className="text-sm text-text-muted p-4">Admin only — console log is restricted to the instance admin.</p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="">

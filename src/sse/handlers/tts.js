@@ -1,14 +1,15 @@
 import {
-  extractApiKey, isValidApiKey,
+  extractApiKey, isValidApiKey, resolveRequestIdentity,
   getProviderCredentials, markAccountUnavailable,
 } from "../services/auth.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getEffectiveSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleTtsCore } from "open-sse/handlers/ttsCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { handleComboChat } from "open-sse/services/combo.js";
+import { recordEndpointUsage } from "../services/usage.js";
 import * as log from "../utils/logger.js";
 
 // Derived from providers.js: any TTS provider not noAuth requires stored credentials
@@ -33,19 +34,20 @@ export async function handleTts(request) {
   const style = body.style || ""; // Optional style/voice instructions (e.g. Xiaomi MiMo)
   log.request("POST", `${url.pathname} | ${modelStr} | format=${responseFormat}${language ? ` | lang=${language}` : ""}`);
 
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    const apiKey = extractApiKey(request);
-    if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-  }
+  // Resolve per-user identity regardless of requireApiKey (block-scoped const
+  // would leave uses below undefined when key checks are disabled).
+  const apiKey = extractApiKey(request);
+  const { userId: requestUserId } = await resolveRequestIdentity(request);
+  const settings = await getEffectiveSettings(requestUserId);
+  // Fail closed: a presented key must map to an active account.
+  if (apiKey && !(await isValidApiKey(apiKey))) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+  if (settings.requireApiKey && !apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
 
   if (!modelStr) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
   if (!body.input) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: input");
 
   // Combo expansion: model may be a combo name → run fallback/round-robin across models
-  const comboModels = await getComboModels(modelStr);
+  const comboModels = await getComboModels(modelStr, requestUserId);
   if (comboModels) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[modelStr]?.fallbackStrategy || settings.comboStrategy || "fallback";
@@ -54,19 +56,20 @@ export async function handleTts(request) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleModelTts(b, m, responseFormat, language, style),
+      handleSingleModel: (b, m) => handleSingleModelTts(b, m, responseFormat, language, style, requestUserId, apiKey),
       log,
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit,
+      userId: requestUserId,
     });
   }
 
-  return handleSingleModelTts(body, modelStr, responseFormat, language, style);
+  return handleSingleModelTts(body, modelStr, responseFormat, language, style, requestUserId, apiKey);
 }
 
-async function handleSingleModelTts(body, modelStr, responseFormat, language, style) {
-  const modelInfo = await getModelInfo(modelStr);
+async function handleSingleModelTts(body, modelStr, responseFormat, language, style, requestUserId = null, apiKey = null) {
+  const modelInfo = await getModelInfo(modelStr, requestUserId);
   if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
 
   const { provider, model } = modelInfo;
@@ -75,7 +78,10 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
   // noAuth providers — no credential needed
   if (!CREDENTIALED_PROVIDERS.has(provider)) {
     const result = await handleTtsCore({ provider, model, input: body.input, responseFormat, language, style });
-    if (result.success) return result.response;
+    if (result.success) {
+      recordEndpointUsage({ provider, model, userId: requestUserId, apiKey, endpoint: "/v1/audio/speech" });
+      return result.response;
+    }
     return errorResponse(result.status || HTTP_STATUS.BAD_GATEWAY, result.error || "TTS failed");
   }
 
@@ -85,7 +91,7 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { userId: requestUserId });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {
@@ -101,7 +107,10 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
 
     const result = await handleTtsCore({ provider, model, input: body.input, credentials, responseFormat, language, style });
 
-    if (result.success) return result.response;
+    if (result.success) {
+      recordEndpointUsage({ provider, model, connectionId: credentials.connectionId, userId: requestUserId, apiKey, endpoint: "/v1/audio/speech" });
+      return result.response;
+    }
 
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
     if (shouldFallback) {

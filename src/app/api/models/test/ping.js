@@ -39,12 +39,14 @@ function createSilentWavFile() {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-async function getInternalHeaders() {
-  let apiKey = null;
-  try {
-    const keys = await getApiKeys();
-    apiKey = keys.find((k) => k.isActive !== false)?.key || null;
-  } catch {}
+async function getInternalHeaders(apiKeyOverride = null) {
+  let apiKey = apiKeyOverride || null;
+  if (!apiKey) {
+    try {
+      const keys = await getApiKeys();
+      apiKey = keys.find((k) => k.isActive !== false)?.key || null;
+    } catch {}
+  }
 
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
@@ -52,8 +54,20 @@ async function getInternalHeaders() {
   return headers;
 }
 
-export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`) {
-  const headers = await getInternalHeaders();
+// Find an active gateway key owned by a specific user (online mode) for
+// internal pings, so per-user routing resolves to the right connections.
+export async function getUserGatewayKey(userId) {
+  if (!userId) return null;
+  try {
+    const keys = await getApiKeys({ userId });
+    return keys.find((k) => k.isActive !== false)?.key || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`, apiKeyOverride = null) {
+  const headers = await getInternalHeaders(apiKeyOverride);
   const start = Date.now();
 
   if (kind === "embedding") {

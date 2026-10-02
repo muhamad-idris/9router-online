@@ -18,10 +18,12 @@ vi.mock("@/sse/services/auth.js", () => ({
   clearAccountError: mocks.clearAccountError,
   extractApiKey: mocks.extractApiKey,
   isValidApiKey: mocks.isValidApiKey,
+  resolveRequestIdentity: async () => ({ userId: null, keyId: null, apiKey: null }),
 }));
 
 vi.mock("@/lib/localDb", () => ({
   getSettings: mocks.getSettings,
+  getEffectiveSettings: mocks.getSettings,
   getCombos: mocks.getCombos,
 }));
 
@@ -91,6 +93,7 @@ describe("web fetch account state", () => {
       "jina-reader",
       expect.any(Set),
       "webfetch:jina-reader",
+      { userId: null },
     );
     expect(mocks.markAccountUnavailable).not.toHaveBeenCalled();
   });

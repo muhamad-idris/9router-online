@@ -431,6 +431,7 @@ describe("App-layer custom transport resolution (stt.js)", () => {
       vi.resetModules();
       vi.doMock(LOCALDB, () => ({
         getSettings: async () => ({ requireApiKey: false }),
+        getEffectiveSettings: async () => ({ requireApiKey: false }),
         getCustomModels: async () => ([{
           providerAlias: "gemini", id: "probe-sttjs-1", type: "stt", transport: "gemini-live",
         }]),
@@ -438,6 +439,7 @@ describe("App-layer custom transport resolution (stt.js)", () => {
       vi.doMock(AUTH, () => ({
         extractApiKey: () => null,
         isValidApiKey: async () => true,
+        resolveRequestIdentity: async () => ({ userId: null, keyId: null, apiKey: null }),
         getProviderCredentials: async () => ({
           apiKey: "AIza-TEST", connectionId: "c1", connectionName: "t", providerSpecificData: {},
         }),

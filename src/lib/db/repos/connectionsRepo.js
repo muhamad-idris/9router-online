@@ -44,13 +44,14 @@ function rowToConn(row) {
     email: row.email,
     priority: row.priority,
     isActive: row.isActive === 1 || row.isActive === true,
+    userId: row.userId ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
 function connToRow(c) {
-  const { id, provider, authType, name, email, priority, isActive, createdAt, updatedAt, ...rest } = c;
+  const { id, provider, authType, name, email, priority, isActive, userId, createdAt, updatedAt, ...rest } = c;
   return {
     id,
     provider,
@@ -59,6 +60,7 @@ function connToRow(c) {
     email: email ?? null,
     priority: priority ?? null,
     isActive: isActive === false ? 0 : 1,
+    userId: userId ?? null,
     data: stringifyJson(rest),
     createdAt,
     updatedAt,
@@ -68,13 +70,13 @@ function connToRow(c) {
 function upsert(db, c) {
   const r = connToRow(c);
   db.run(
-    `INSERT INTO providerConnections(id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO providerConnections(id, provider, authType, name, email, priority, isActive, userId, data, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        provider=excluded.provider, authType=excluded.authType, name=excluded.name,
        email=excluded.email, priority=excluded.priority, isActive=excluded.isActive,
-       data=excluded.data, updatedAt=excluded.updatedAt`,
-    [r.id, r.provider, r.authType, r.name, r.email, r.priority, r.isActive, r.data, r.createdAt, r.updatedAt]
+       userId=excluded.userId, data=excluded.data, updatedAt=excluded.updatedAt`,
+    [r.id, r.provider, r.authType, r.name, r.email, r.priority, r.isActive, r.userId, r.data, r.createdAt, r.updatedAt]
   );
 }
 
@@ -95,6 +97,7 @@ export async function getProviderConnections(filter = {}) {
   const params = [];
   if (filter.provider) { where.push("provider = ?"); params.push(filter.provider); }
   if (filter.isActive !== undefined) { where.push("isActive = ?"); params.push(filter.isActive ? 1 : 0); }
+  if (filter.userId) { where.push("userId = ?"); params.push(filter.userId); }
   const sql = `SELECT * FROM providerConnections${where.length ? ` WHERE ${where.join(" AND ")}` : ""}`;
   const rows = db.all(sql, params);
   const list = rows.map(rowToConn);
@@ -138,6 +141,9 @@ export async function createProviderConnection(data) {
   let result;
 
   db.transaction(() => {
+    // Scope pool queries to the owner so users never collide on names/priorities.
+    const ownerClause = data.userId ? " AND userId = ?" : "";
+    const ownerParams = data.userId ? [data.userId] : [];
     // apikey connections are deduped by name and need only the current max
     // priority, so query for those directly instead of loading the whole pool
     // (O(pool) per key — the other half of the import cost in #4311). The oauth
@@ -146,12 +152,12 @@ export async function createProviderConnection(data) {
     const isApikey = data.authType === "apikey" && !!data.name;
     const all = isApikey
       ? db.all(
-          `SELECT * FROM providerConnections WHERE provider = ? AND authType = ? AND name = ?`,
-          [data.provider, "apikey", data.name]
+          `SELECT * FROM providerConnections WHERE provider = ? AND authType = ? AND name = ?${ownerClause}`,
+          [data.provider, "apikey", data.name, ...ownerParams]
         ).map(rowToConn)
-      : db.all(`SELECT * FROM providerConnections WHERE provider = ?`, [data.provider]).map(rowToConn);
+      : db.all(`SELECT * FROM providerConnections WHERE provider = ?${ownerClause}`, [data.provider, ...ownerParams]).map(rowToConn);
     const poolSize = isApikey
-      ? db.get(`SELECT COUNT(*) AS n FROM providerConnections WHERE provider = ?`, [data.provider])?.n ?? all.length
+      ? db.get(`SELECT COUNT(*) AS n FROM providerConnections WHERE provider = ?${ownerClause}`, [data.provider, ...ownerParams])?.n ?? all.length
       : all.length;
 
     let existing = null;
@@ -225,7 +231,9 @@ export async function createProviderConnection(data) {
       // MAX(priority)+1 in SQL rather than a reduce over the loaded pool: the
       // apikey path no longer has the whole pool in memory, and the aggregate
       // is served by the index instead of a row scan. #4311
-      const maxRow = db.get(`SELECT MAX(priority) AS m FROM providerConnections WHERE provider = ?`, [data.provider]);
+      const maxRow = data.userId
+        ? db.get(`SELECT MAX(priority) AS m FROM providerConnections WHERE provider = ? AND userId = ?`, [data.provider, data.userId])
+        : db.get(`SELECT MAX(priority) AS m FROM providerConnections WHERE provider = ?`, [data.provider]);
       connectionPriority = (maxRow?.m || 0) + 1;
     }
 
@@ -236,6 +244,7 @@ export async function createProviderConnection(data) {
       name: connectionName,
       priority: connectionPriority,
       isActive: data.isActive !== undefined ? data.isActive : true,
+      userId: data.userId || null,
       createdAt: now,
       updatedAt: now,
     };

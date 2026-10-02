@@ -3,6 +3,7 @@ import {
   getProviderConnections,
   updateProviderConnection,
 } from "@/lib/localDb";
+import { getRequestUser } from "@/lib/auth/requestUser";
 
 const MODEL_LOCK_PREFIX = "modelLock_";
 
@@ -21,7 +22,13 @@ function getActiveModelLocks(connection) {
 
 export async function GET() {
   try {
-    const connections = await getProviderConnections();
+    // Scoped per viewer in online mode: cooldowns/errors reveal whose
+    // accounts are burning (legacy: all).
+    let viewerId = null;
+    try {
+      viewerId = (await getRequestUser())?.id || null;
+    } catch {}
+    const connections = await getProviderConnections(viewerId ? { userId: viewerId } : {});
     const models = [];
 
     for (const connection of connections) {
@@ -71,7 +78,12 @@ export async function POST(request) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
 
-    const connections = await getProviderConnections({ provider });
+    // Scoped per viewer: users may only clear their own cooldowns.
+    let viewerId = null;
+    try {
+      viewerId = (await getRequestUser())?.id || null;
+    } catch {}
+    const connections = await getProviderConnections(viewerId ? { provider, userId: viewerId } : { provider });
     const lockKey = `${MODEL_LOCK_PREFIX}${model}`;
 
     await Promise.all(

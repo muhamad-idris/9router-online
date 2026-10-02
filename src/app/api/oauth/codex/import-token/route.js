@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { ownerIdFromSession } from "@/lib/auth/connectionOwner";
 import { extractCodexAccountInfo } from "@/lib/oauth/providers";
 
 /**
@@ -71,6 +72,7 @@ export async function POST(request) {
     const connection = await createProviderConnection({
       provider: "codex",
       authType: "access_token",
+      userId: await ownerIdFromSession(),
       accessToken: token,
       name: connectionName,
       email: email,

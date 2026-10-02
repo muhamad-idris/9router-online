@@ -5,7 +5,7 @@ import {
   isValidApiKey,
   markAccountUnavailable,
 } from "@/sse/services/auth.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, resolveGatewayIdentity } from "@/lib/localDb";
 import { PROVIDER_MODELS } from "@/shared/constants/models";
 import { GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
 import { initTranslators } from "open-sse/translator/index.js";
@@ -179,16 +179,15 @@ function buildGeminiNativeUrl(requestUrl, model, action) {
 
 async function validateGeminiNativeClientKey(request) {
   const settings = await getSettings();
-  if (!settings.requireApiKey) return null;
 
   const apiKey = extractGeminiClientApiKey(request);
-  if (!apiKey) {
-    return Response.json({ error: { message: "Missing API key" } }, { status: 401 });
-  }
-
-  const valid = await isValidApiKey(apiKey);
-  if (!valid) {
+  // Fail closed: a presented key must map to an active account regardless of
+  // requireApiKey — otherwise unknown keys fall back to the shared pool.
+  if (apiKey && !(await isValidApiKey(apiKey))) {
     return Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
+  }
+  if (settings.requireApiKey && !apiKey) {
+    return Response.json({ error: { message: "Missing API key" } }, { status: 401 });
   }
 
   return null;
@@ -239,6 +238,13 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
   const authError = await validateGeminiNativeClientKey(request);
   if (authError) return authError;
 
+  // Per-user scoping: the gateway key identifies the owner; only their
+  // gemini connections may be used (null = legacy local shared mode).
+  let requestUserId = null;
+  try {
+    requestUserId = (await resolveGatewayIdentity(extractGeminiClientApiKey(request)))?.userId || null;
+  } catch {}
+
   const modelId = normalizeGeminiNativeModel(model);
   if (!GEMINI_NATIVE_MODEL_PATTERN.test(modelId)) {
     return Response.json({ error: { message: "Invalid model" } }, { status: 400 });
@@ -249,7 +255,7 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials("gemini", excludeConnectionIds, modelId);
+    const credentials = await getProviderCredentials("gemini", excludeConnectionIds, modelId, { userId: requestUserId });
     if (!credentials || credentials.allRateLimited) {
       console.log(`[GEMINI_NATIVE] exhausted model=${modelId} status=${lastStatus || Number(credentials?.lastErrorCode) || 503} error=${lastError || credentials?.lastError || "No active credentials for provider: gemini"}`);
       return Response.json(
