@@ -875,7 +875,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                     Remote server detected. After consent, the provider redirects to{" "}
                     <code className="font-mono text-xs break-all">{authData.redirectUri}</code>{" "}
                     on <em>your</em> machine, which shows an error page — that is normal.
-                    Copy that full URL (it contains <code className="font-mono text-xs">code=…</code>) and paste it below.
+                    Copy that full URL (it contains <code className="font-mono text-xs">code=…</code>), paste it below,
+                    then click <strong>Open server callback</strong> — the login completes automatically.
                   </div>
                 )}
                 <p className="text-sm font-medium mb-2">
@@ -894,6 +895,24 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                   placeholder={manualPlaceholder}
                   className="font-mono text-xs"
                 />
+                {!isLocalhost && (
+                  <Button
+                    variant="secondary"
+                    fullWidth
+                    disabled={!callbackUrl || !/(code|token)=/.test(callbackUrl)}
+                    onClick={() => {
+                      try {
+                        const u = new URL(callbackUrl.trim());
+                        if (!u.search) throw new Error("bad url");
+                        window.open(`${window.location.origin}${u.pathname}${u.search}`, "_blank");
+                      } catch {
+                        setError("Paste the full localhost callback URL first.");
+                      }
+                    }}
+                  >
+                    Open server callback (auto-complete)
+                  </Button>
+                )}
               </div>
             </div>
 
