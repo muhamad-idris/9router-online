@@ -790,7 +790,9 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                 {step === "input" && (
                   <div className="space-y-3">
                     <p className="text-sm text-text-muted">
-                      Popup was blocked. After authorizing in the browser, paste the full callback URL here:
+                      {isLocalhost
+                        ? "Popup was blocked. After authorizing in the browser, paste the full callback URL here:"
+                        : "Your server runs remotely, so after authorizing the browser lands on a localhost error page — that is expected. Copy the full URL from the address bar and paste it here:"}
                     </p>
                     <Input
                       value={callbackUrl}
@@ -868,6 +870,14 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
               </div>
 
               <div>
+                {!isLocalhost && authData?.redirectUri && (
+                  <div className="px-3 py-2 mb-2 rounded-lg text-sm bg-blue-500/10 text-blue-700 dark:text-blue-300">
+                    Remote server detected. After consent, the provider redirects to{" "}
+                    <code className="font-mono text-xs break-all">{authData.redirectUri}</code>{" "}
+                    on <em>your</em> machine, which shows an error page — that is normal.
+                    Copy that full URL (it contains <code className="font-mono text-xs">code=…</code>) and paste it below.
+                  </div>
+                )}
                 <p className="text-sm font-medium mb-2">
                   Step 2: Paste the {provider === "xai" ? "callback URL or copied code" : isKimchiProvider ? "callback URL or copied token" : "callback URL"} here
                 </p>
