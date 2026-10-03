@@ -53,7 +53,7 @@ export default function RegisterPage() {
       <div className="landing-grid absolute inset-0 pointer-events-none" aria-hidden="true" />
       <div className="relative z-10 w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-primary mb-2">9Router</h1>
+          <h1 className="text-3xl font-bold text-primary mb-2">onRouter</h1>
           <p className="text-text-muted">Buat akun untuk mengakses dashboard & gateway /v1</p>
         </div>
 
