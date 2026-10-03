@@ -1,4 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="24" fill="#0a0a0a"/>
-  <text x="96" y="120" font-family="Arial, sans-serif" font-size="80" font-weight="bold" fill="#ffffff" text-anchor="middle">9R</text>
+  <rect width="192" height="192" rx="42" fill="url(#onrouter-hub)"/>
+  <g stroke="#ffffff" stroke-width="12" stroke-linecap="round">
+    <line x1="96" y1="96" x2="96" y2="42"/>
+    <line x1="96" y1="96" x2="142.8" y2="69"/>
+    <line x1="96" y1="96" x2="142.8" y2="123"/>
+    <line x1="96" y1="96" x2="96" y2="150"/>
+    <line x1="96" y1="96" x2="49.2" y2="123"/>
+    <line x1="96" y1="96" x2="49.2" y2="69"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="96" cy="42" r="12"/>
+    <circle cx="142.8" cy="69" r="12"/>
+    <circle cx="142.8" cy="123" r="12"/>
+    <circle cx="96" cy="150" r="12"/>
+    <circle cx="49.2" cy="123" r="12"/>
+    <circle cx="49.2" cy="69" r="12"/>
+  </g>
+  <circle cx="96" cy="96" r="20" fill="#ffffff"/>
+  <defs>
+    <linearGradient id="onrouter-hub" x1="0" y1="0" x2="192" y2="192" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#6D28D9"/>
+    </linearGradient>
+  </defs>
 </svg>
