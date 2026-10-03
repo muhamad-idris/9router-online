@@ -8,6 +8,7 @@ import {
   coerceResponsesArguments,
   coerceResponsesOutput,
 } from "../translator/formats/responsesApi.js";
+import { OPENCODE_MIN_OUTPUT_TOKENS } from "../config/runtimeConfig.js";
 
 const SESSION_HEADER = "x-opencode-session";
 const SESSION_FIELD = "_opencodeZenSession";
@@ -295,6 +296,9 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     if (out.max_output_tokens === undefined) {
       if (out.max_completion_tokens !== undefined) out.max_output_tokens = out.max_completion_tokens;
       else if (out.max_tokens !== undefined) out.max_output_tokens = out.max_tokens;
+    }
+    if (out.max_output_tokens !== undefined && out.max_output_tokens < OPENCODE_MIN_OUTPUT_TOKENS) {
+      out.max_output_tokens = OPENCODE_MIN_OUTPUT_TOKENS;
     }
     delete out.max_tokens;
     delete out.max_completion_tokens;

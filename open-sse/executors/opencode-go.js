@@ -3,6 +3,7 @@ import { DefaultExecutor } from "./default.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { getModelTargetFormat } from "../config/providerModels.js";
 import { FORMATS } from "../translator/formats.js";
+import { OPENCODE_MIN_OUTPUT_TOKENS } from "../config/runtimeConfig.js";
 import {
   normalizeResponsesInput,
   clampResponsesCallId,
@@ -167,6 +168,9 @@ export class OpenCodeGoExecutor extends DefaultExecutor {
     if (out.max_output_tokens === undefined) {
       if (out.max_completion_tokens !== undefined) out.max_output_tokens = out.max_completion_tokens;
       else if (out.max_tokens !== undefined) out.max_output_tokens = out.max_tokens;
+    }
+    if (out.max_output_tokens !== undefined && out.max_output_tokens < OPENCODE_MIN_OUTPUT_TOKENS) {
+      out.max_output_tokens = OPENCODE_MIN_OUTPUT_TOKENS;
     }
     delete out.max_tokens;
     delete out.max_completion_tokens;

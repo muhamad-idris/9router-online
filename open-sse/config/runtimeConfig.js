@@ -65,6 +65,11 @@ export const GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS = envMs("GEMINI_NATIVE_TTS_FETCH
 export const DEFAULT_MAX_TOKENS = 64000;
 export const DEFAULT_MIN_TOKENS = 32000;
 
+// OpenCode Console (Responses API) rejects max_output_tokens < 16 with HTTP 400
+// ("The number must be >= 16"). Clamp tiny client caps (e.g. agent-tool
+// verification probes that send max_tokens: 1) up to this floor.
+export const OPENCODE_MIN_OUTPUT_TOKENS = 16;
+
 export const TOKEN_SAVER_HEADER = "x-9router-token-saver";
 
 // Retry config for 429 responses (legacy - kept for backward compatibility)

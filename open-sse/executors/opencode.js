@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
-import { MEMORY_CONFIG } from "../config/runtimeConfig.js";
+import { MEMORY_CONFIG, OPENCODE_MIN_OUTPUT_TOKENS } from "../config/runtimeConfig.js";
 import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
@@ -430,6 +430,9 @@ export class OpenCodeExecutor extends BaseExecutor {
       if (body.max_output_tokens === undefined) {
         if (body.max_completion_tokens !== undefined) body.max_output_tokens = body.max_completion_tokens;
         else if (body.max_tokens !== undefined) body.max_output_tokens = body.max_tokens;
+      }
+      if (body.max_output_tokens !== undefined && body.max_output_tokens < OPENCODE_MIN_OUTPUT_TOKENS) {
+        body.max_output_tokens = OPENCODE_MIN_OUTPUT_TOKENS;
       }
       delete body.max_tokens;
       delete body.max_completion_tokens;
