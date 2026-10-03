@@ -32,7 +32,7 @@ const checkCodewhaleInstalled = async () => {
 
 const has9RouterConfig = (content) => {
   if (!content) return false;
-  return content.includes("managed by 9Router") || content.includes("localhost:20128");
+  return content.includes("managed by onRouter") || content.includes("managed by 9Router") || content.includes("localhost:20128");
 };
 
 const readConfig = async () => {
@@ -102,7 +102,7 @@ export async function POST(request) {
       model: model || "provider/model-id",
     };
 
-    const header = "# CodeWhale config — managed by 9Router\n\n";
+    const header = "# CodeWhale config — managed by onRouter\n\n";
     const content = header + stringifyTOML(existing);
 
     await fs.writeFile(configPath, content, "utf-8");
@@ -136,7 +136,7 @@ export async function DELETE() {
       await fs.writeFile(configPath, stringifyTOML(existing), "utf-8");
     }
 
-    return NextResponse.json({ success: true, message: "9Router removed from CodeWhale" });
+    return NextResponse.json({ success: true, message: "onRouter removed from CodeWhale" });
   } catch (err) {
     return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }

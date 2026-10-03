@@ -54,7 +54,7 @@ export default function FlowAnimation() {
           hub
         </span>
         <span className="text-xs font-bold text-white tracking-widest uppercase">
-          9Router
+          onRouter
         </span>
         <div className="absolute inset-0 rounded-full border border-[#f97815]/30 animate-ping opacity-20"></div>
       </div>

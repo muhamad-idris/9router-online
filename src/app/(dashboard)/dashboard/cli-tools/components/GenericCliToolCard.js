@@ -301,7 +301,7 @@ export default function GenericCliToolCard({
         return [
           {
             filename: "~/.forge/config.toml",
-            content: `# Forge config — managed by 9Router\n\n[openai]\napi_key = "${key}"\nbase_url = "${effectiveUrl}"\nmodel = "${mod}"`,
+            content: `# Forge config — managed by onRouter\n\n[openai]\napi_key = "${key}"\nbase_url = "${effectiveUrl}"\nmodel = "${mod}"`,
           },
         ];
       case "smelt":
@@ -315,7 +315,7 @@ export default function GenericCliToolCard({
         return [
           {
             filename: "~/.codewhale/config.toml",
-            content: `# CodeWhale config — managed by 9Router\n\n[openai]\nbase_url = "${effectiveUrl}"\napi_key = "${key}"\nmodel = "${mod}"`,
+            content: `# CodeWhale config — managed by onRouter\n\n[openai]\nbase_url = "${effectiveUrl}"\napi_key = "${key}"\nmodel = "${mod}"`,
           },
         ];
       default:
@@ -392,7 +392,7 @@ export default function GenericCliToolCard({
                   <span className="material-symbols-outlined text-yellow-500">warning</span>
                   <div className="flex-1">
                     <p className="font-medium text-yellow-600 dark:text-yellow-400">{tool.name} not detected locally</p>
-                    <p className="text-sm text-text-muted">Manual configuration is still available if 9router is deployed on a remote server.</p>
+                    <p className="text-sm text-text-muted">Manual configuration is still available if onRouter is deployed on a remote server.</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 pl-9">
