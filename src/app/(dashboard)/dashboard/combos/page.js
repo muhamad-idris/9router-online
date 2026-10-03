@@ -812,8 +812,8 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
           No models in pool (will fallback to {DEFAULT_FALLBACK_MODEL})
         </div>
       ) : (
-        <div className="mt-3 overflow-hidden rounded-lg border border-border/50">
-          <table className="w-full text-left text-xs">
+        <div className="mt-3 overflow-x-auto custom-scrollbar rounded-lg border border-border/50">
+          <table className="w-full min-w-[420px] text-left text-xs">
             <thead>
               <tr className="border-b border-border/40 bg-black/[0.02] text-text-muted dark:bg-white/[0.02]">
                 <th className="w-12 px-3 py-1.5 font-medium text-center">#</th>

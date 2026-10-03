@@ -1171,7 +1171,7 @@ export default function APIPageClient({ machineId }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {TUNNEL_BENEFITS.map((benefit) => (
               <div key={benefit.title} className="flex flex-col items-center text-center p-3 rounded-lg bg-sidebar/50">
                 <span className="material-symbols-outlined text-xl text-primary mb-1">{benefit.icon}</span>

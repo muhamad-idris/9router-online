@@ -54,7 +54,7 @@ export default function Modal({
       {/* Modal content */}
       <div
         className={cn(
-          "relative w-full bg-surface",
+          "relative w-full max-w-[calc(100vw-2rem)] bg-surface",
           "border border-border-subtle",
           "rounded-[14px] shadow-[var(--shadow-elev)]",
           "fade-in",
@@ -99,7 +99,7 @@ export default function Modal({
         )}
 
         {/* Body */}
-        <div className="p-6 max-h-[calc(85vh-100px)] overflow-y-auto custom-scrollbar">{children}</div>
+        <div className="p-4 sm:p-6 max-h-[calc(85vh-100px)] overflow-y-auto custom-scrollbar">{children}</div>
 
         {/* Footer */}
         {footer && (

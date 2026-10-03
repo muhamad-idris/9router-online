@@ -105,7 +105,7 @@ export default function GitLabAuthModal({ isOpen, providerInfo, onSuccess, onClo
             <p className="text-sm text-text-muted">
               Choose how to authenticate with GitLab Duo:
             </p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button
                 onClick={() => setMode("oauth")}
                 className="flex flex-col items-center gap-2 p-4 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors text-left"
